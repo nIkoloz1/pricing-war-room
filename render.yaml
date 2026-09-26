@@ -1,0 +1,20 @@
+# One-click deploy on Render (render.com → New → Blueprint → pick this repo).
+services:
+  - type: web
+    name: pricing-war-room
+    runtime: node
+    plan: starter # always on; the free plan sleeps after 15 idle minutes and has no disk
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: HOST_KEY
+        generateValue: true # Render creates a random password. Find it under Environment.
+      - key: DATA_FILE
+        value: /var/data/session.json
+      - key: NODE_VERSION
+        value: 22
+    disk:
+      name: war-room-data
+      mountPath: /var/data
+      sizeGB: 1

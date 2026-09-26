@@ -1,0 +1,46 @@
+{
+  "name": "pricing-war-room",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Pricing War Room: a live multiplayer pricing simulation for startup pricing workshops.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c yellow,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch server/src/index.ts --dev",
+    "dev:client": "vite",
+    "build": "npm run typecheck && vite build && npm run build:server",
+    "build:server": "esbuild server/src/index.ts --bundle --platform=node --format=esm --packages=external --target=node20 --outfile=dist/server.js",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p server/tsconfig.json",
+    "test": "vitest run",
+    "calibrate": "tsx scripts/calibrate.ts"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "@fontsource-variable/fraunces": "^5.1.1",
+    "@fontsource/ibm-plex-mono": "^5.1.1",
+    "@fontsource/ibm-plex-sans": "^5.1.1",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "@types/qrcode": "^1.5.5",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.0",
+    "esbuild": "^0.24.2",
+    "qrcode": "^1.5.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "socket.io-client": "^4.8.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.7",
+    "vitest": "^2.1.8"
+  }
+}
