@@ -1,40 +1,37 @@
 // ============================================================================
 //  SIMULATION PARAMETERS: the one file to edit to recalibrate the game.
 // ============================================================================
-//  Company economics (humans) live in ./profiles.ts, AI competitors in ./ai.ts.
-//  Everything that shapes the market itself lives here.
+//  Company economics (both humans and AI fills) live in ./companies.ts.
+//  AI and demo-bot behaviour lives in ./ai.ts. The engine is ./market.ts.
 
-/** Reference price every company starts from (QAR / month). */
+import { PRICE_OPTIONS } from '../../../shared/types';
+
+/** Going market rate every company starts from (QAR / month). */
 export const REFERENCE_PRICE = 1000;
 
-/** Minimum number of competitors in the market. AI fills the gap. */
-export const MIN_COMPETITORS = 10;
+/** Similarity s = exp(−KAPPA × distance between positions). Higher = similarity falls faster. */
+export const KAPPA = 3.0;
+
+/** Share of a company's price response that flows between similar rivals (0..1). */
+export const LAMBDA = 0.6;
+
+/** Companies per market: one of each archetype A..J. */
+export const MARKET_SIZE = 10;
 
 /** Maximum number of human participants. */
 export const MAX_HUMANS = 50;
 
-/** Base customers per competitor: base_market_demand = this × total competitors. */
-export const BASE_DEMAND_PER_COMPETITOR = 100;
+/** Price grid, shared with the client. */
+export const PRICE_GRID = PRICE_OPTIONS;
+export const MIN_PRICE = PRICE_GRID[0];
+export const MAX_PRICE = PRICE_GRID[PRICE_GRID.length - 1];
 
-/**
- * Global demand effect:
- *   factor = clamp(1 + SENSITIVITY × (REF − avg) / REF, MIN, MAX)
- * Lower market prices modestly grow the market; higher prices shrink it.
- */
-export const GLOBAL_DEMAND_SENSITIVITY = 0.25;
-export const GLOBAL_DEMAND_MIN = 0.85;
-export const GLOBAL_DEMAND_MAX = 1.1;
-
-/** Default decision for anyone who does not submit in time. */
-export const DEFAULT_PRICE = 1000;
+/** Default decision in Round 1 for anyone who does not submit. Round 2 defaults to their Round 1 price. */
+export const DEFAULT_PRICE_R1 = 1000;
 
 /** Round timers (seconds). The host can change them live. */
-export const ROUND1_SECONDS = 120;
-export const ROUND2_SECONDS = 180;
+export const ROUND1_SECONDS = 240;
+export const ROUND2_SECONDS = 300;
 
-/** Counterfactual scenarios shown on the host debrief. */
-export const COUNTERFACTUALS: { key: string; label: string; price: number }[] = [
-  { key: 'hold', label: 'Everyone holds at QAR 1,000', price: 1000 },
-  { key: 'cut', label: 'Everyone cuts to QAR 900', price: 900 },
-  { key: 'raise', label: 'Everyone raises to QAR 1,100', price: 1100 },
-];
+/** Letters of the price-sensitive SMB cluster used in the debrief counterfactual. */
+export const SMB_CLUSTER = ['B', 'F', 'J'] as const;

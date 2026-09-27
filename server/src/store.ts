@@ -8,11 +8,10 @@ export class JsonStore implements Store {
     fs.mkdirSync(path.dirname(file), { recursive: true });
   }
 
-  load(): SessionState | null {
+  /** Returns whatever was saved; the Game discards states from other versions. */
+  load(): unknown {
     try {
-      const raw = fs.readFileSync(this.file, 'utf8');
-      const data = JSON.parse(raw) as SessionState;
-      return data?.version === 1 ? data : null;
+      return JSON.parse(fs.readFileSync(this.file, 'utf8'));
     } catch {
       return null;
     }

@@ -127,6 +127,16 @@ export function createApp({ game, hostKey, staticDir, tickMs = 250 }: AppOptions
       }
     });
 
+    socket.on('player:guess', (payload: { token?: string; competitorId?: string }, ack: unknown) => {
+      try {
+        const r = game.guess(payload?.token, payload?.competitorId);
+        const p = game.playerByToken(payload?.token)!;
+        reply(ack, { ok: true, data: { ...r, view: game.playerView(p) } });
+      } catch (e) {
+        fail(ack, e);
+      }
+    });
+
     socket.on('host:auth', (payload: { key?: string }, ack: unknown) => {
       if (!isHost(payload?.key)) return reply(ack, { ok: false, error: 'Invalid host key.' });
       socket.join('host');

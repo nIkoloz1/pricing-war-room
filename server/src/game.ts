@@ -1,43 +1,61 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import {
   PRICE_OPTIONS,
+  type BestResponseTable,
   type CompetitorResult,
+  type CompetitorRow,
   type Debrief,
-  type Economics,
+  type FlowRow,
   type HostAction,
   type HostView,
+  type LeaderRow,
+  type Letter,
+  type MarketRecord,
   type MyRoundResult,
   type Phase,
   type PlayerView,
   type Price,
   type PublicMarketInfo,
+  type QuizOption,
+  type Round2Desk,
   type RoundNo,
   type RoundRecord,
+  type ScenarioOutcome,
   type TimerState,
 } from '../../shared/types';
+import { aiRound1Decision, aiRound2Decision, demoGuess, demoRound1Decision, demoRound2Decision, type Round2Context } from './sim/ai';
+import { COMPANIES, COMPANY_BY_LETTER } from './sim/companies';
 import {
-  AI_ARCHETYPES,
-  aiRound1Decision,
-  aiRound2Decision,
-  demoRound1Decision,
-  demoRound2Decision,
-  round2Context,
-} from './sim/ai';
-import { clearMarket, rngFor, type MarketEntry } from './sim/market';
+  bestResponse,
+  clearMarket,
+  flowsFor,
+  isGridPrice,
+  moveStats,
+  paidProfit,
+  reactionPer100,
+  rngFor,
+  shuffle,
+  similarity,
+  snap,
+  type MarketEntry,
+} from './sim/market';
 import {
-  COUNTERFACTUALS,
-  DEFAULT_PRICE,
+  DEFAULT_PRICE_R1,
+  MARKET_SIZE,
   MAX_HUMANS,
-  MIN_COMPETITORS,
   REFERENCE_PRICE,
   ROUND1_SECONDS,
   ROUND2_SECONDS,
+  SMB_CLUSTER,
 } from './sim/params';
 import { PROFILES, PROFILE_BY_ID, codenameFor } from './sim/profiles';
 
 // ============================================================================
 //  Game: the authoritative state machine. No sockets in here, so it can be
 //  driven directly by tests with a fake clock.
+//
+//  Players are dealt dossiers on join. At Round 1 start they are placed into
+//  parallel markets of ten (one company per archetype); AI fills the gaps.
 // ============================================================================
 
 export interface StoredPlayer {
@@ -48,17 +66,20 @@ export interface StoredPlayer {
   profileId: string;
   isDemo: boolean;
   joinedAt: number;
+  marketIndex: number | null;
 }
 
-export interface StoredAi extends Economics {
-  id: string;
+export interface StoredAi {
+  id: string; // M1-AI-G
   name: string;
-  archetypeIndex: number;
-  archetype: string;
+  letter: Letter;
+  marketIndex: number;
 }
+
+type DemoEvent = { playerId: string; round: RoundNo; at: number } & ({ kind: 'price'; price: Price } | { kind: 'guess'; competitorId: string });
 
 export interface SessionState {
-  version: 1;
+  version: 2;
   sessionId: string;
   code: string;
   seed: string;
@@ -71,14 +92,17 @@ export interface SessionState {
   r2Seconds: number;
   players: StoredPlayer[];
   ai: StoredAi[];
+  marketCount: number;
   decisions: Record<'1' | '2', Record<string, Price>>;
   aiDecisions: Record<'1' | '2', Record<string, Price>>;
+  /** playerId → competitor id they named as their Round 1 primary competitor */
+  guesses: Record<string, string>;
   rounds: Partial<Record<'1' | '2', RoundRecord>>;
-  demoSchedule: { playerId: string; round: RoundNo; at: number; price: Price }[];
+  demoSchedule: DemoEvent[];
 }
 
 export interface Store {
-  load(): SessionState | null;
+  load(): unknown;
   save(state: SessionState): void;
 }
 
@@ -92,7 +116,7 @@ function makeCode(): string {
 
 export function freshSession(now: number, seed?: string, prev?: SessionState): SessionState {
   return {
-    version: 1,
+    version: 2,
     sessionId: randomUUID(),
     code: makeCode(),
     seed: seed ?? randomBytes(8).toString('hex'),
@@ -105,8 +129,10 @@ export function freshSession(now: number, seed?: string, prev?: SessionState): S
     r2Seconds: prev?.r2Seconds ?? ROUND2_SECONDS,
     players: [],
     ai: [],
+    marketCount: 0,
     decisions: { '1': {}, '2': {} },
     aiDecisions: { '1': {}, '2': {} },
+    guesses: {},
     rounds: {},
     demoSchedule: [],
   };
@@ -115,9 +141,10 @@ export function freshSession(now: number, seed?: string, prev?: SessionState): S
 const DECISION_PHASE: Record<RoundNo, Phase> = { 1: 'r1_decision', 2: 'r2_decision' };
 const CLEARING_PHASE: Record<RoundNo, Phase> = { 1: 'r1_clearing', 2: 'r2_clearing' };
 const RESULTS_PHASE: Record<RoundNo, Phase> = { 1: 'r1_results', 2: 'r2_results' };
+const ROUND2_PHASES: Phase[] = ['r2_decision', 'r2_clearing', 'r2_results', 'debrief'];
 
 export function isRevealed(phase: Phase, round: RoundNo): boolean {
-  if (round === 1) return ['r1_results', 'workshop', 'r2_decision', 'r2_clearing', 'r2_results', 'debrief'].includes(phase);
+  if (round === 1) return ['r1_results', 'workshop', ...ROUND2_PHASES].includes(phase);
   return ['r2_results', 'debrief'].includes(phase);
 }
 
@@ -127,11 +154,25 @@ export function currentRound(phase: Phase): RoundNo | null {
   return null;
 }
 
+const letterOf = (p: StoredPlayer) => PROFILE_BY_ID[p.profileId].letter;
+const median = (xs: number[]) => {
+  if (!xs.length) return null;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
+
+/** Market entries rebuilt from a cleared market record. */
+function entriesFromRecord(m: MarketRecord): MarketEntry[] {
+  return m.results.map((r) => ({ id: r.id, kind: r.kind, letter: r.letter, company: r.company, price: r.price, defaulted: r.defaulted }));
+}
+
 export interface GameOptions {
   now?: () => number;
   store?: Store;
   seed?: string;
-  /** Demo bots submit between these fractions of the round timer. */
+  /** Demo bots act between these fractions of the round timer. */
   demoWindow?: [number, number];
 }
 
@@ -146,8 +187,10 @@ export class Game {
   constructor(opts: GameOptions = {}) {
     this.now = opts.now ?? Date.now;
     this.store = opts.store;
-    this.demoWindow = opts.demoWindow ?? [0.04, 0.35];
-    this.state = this.store?.load() ?? freshSession(this.now(), opts.seed);
+    this.demoWindow = opts.demoWindow ?? [0.04, 0.3];
+    const loaded = this.store?.load() as SessionState | null | undefined;
+    // Anything saved by an older version starts a fresh session instead of crashing.
+    this.state = loaded && loaded.version === 2 ? loaded : freshSession(this.now(), opts.seed);
     this.persist();
   }
 
@@ -172,10 +215,6 @@ export class Game {
     return this.state.players;
   }
 
-  get totalCompetitors(): number {
-    return Math.max(this.humans.length, MIN_COMPETITORS);
-  }
-
   playerByToken(token: unknown): StoredPlayer | undefined {
     if (typeof token !== 'string' || !token) return undefined;
     return this.state.players.find((p) => p.token === token);
@@ -186,7 +225,7 @@ export class Game {
     const code = String(rawCode ?? '').trim().toUpperCase();
     if (!isDemo && code !== s.code) throw new GameError('That session code is not active. Check the code on the screen.');
     if (s.phase !== 'registration' || !s.registrationOpen) throw new GameError('Registration closed.');
-    if (s.players.length >= MAX_HUMANS) throw new GameError(`The market is full (${MAX_HUMANS} participants).`);
+    if (s.players.length >= MAX_HUMANS) throw new GameError(`The room is full (${MAX_HUMANS} participants).`);
     const name = String(rawName ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
     if (!name) throw new GameError('Please enter your name.');
 
@@ -199,22 +238,42 @@ export class Game {
       profileId: this.profileForIndex(index),
       isDemo,
       joinedAt: this.now(),
+      marketIndex: null,
     };
     s.players.push(player);
     this.changed();
     return player;
   }
 
-  /** Balanced random assignment: each block of 10 players gets all 10 dossiers, shuffled. */
+  /** Balanced random assignment: each block of 10 joiners gets all 10 dossiers, shuffled. */
   private profileForIndex(index: number): string {
     const block = Math.floor(index / PROFILES.length);
-    const rand = rngFor(this.state.seed, 'deck', block);
-    const order = PROFILES.map((_, i) => i);
-    for (let i = order.length - 1; i > 0; i--) {
-      const j = Math.floor(rand() * (i + 1));
-      [order[i], order[j]] = [order[j], order[i]];
-    }
+    const order = shuffle(PROFILES.map((_, i) => i), rngFor(this.state.seed, 'deck', block));
     return PROFILES[order[index % PROFILES.length]].id;
+  }
+
+  /** Markets needed for the current registrations (max humans on any one archetype). */
+  private projectedMarkets(): number {
+    const counts: Record<string, number> = {};
+    for (const p of this.state.players) counts[letterOf(p)] = (counts[letterOf(p)] ?? 0) + 1;
+    return Math.max(1, ...Object.values(counts));
+  }
+
+  /** Market m takes the m-th human of each archetype (join order); AI fills the rest. */
+  private assignMarkets() {
+    const s = this.state;
+    const byLetter: Record<string, StoredPlayer[]> = {};
+    for (const p of s.players) (byLetter[letterOf(p)] ??= []).push(p);
+    s.marketCount = this.projectedMarkets();
+    for (const list of Object.values(byLetter)) list.forEach((p, m) => (p.marketIndex = m));
+    s.ai = [];
+    for (let m = 0; m < s.marketCount; m++) {
+      for (const c of COMPANIES) {
+        if (!s.players.some((p) => p.marketIndex === m && letterOf(p) === c.letter)) {
+          s.ai.push({ id: `M${m + 1}-AI-${c.letter}`, name: c.aiName, letter: c.letter, marketIndex: m });
+        }
+      }
+    }
   }
 
   submit(token: unknown, rawPrice: unknown): { price: Price; duplicate: boolean } {
@@ -223,14 +282,32 @@ export class Game {
     const round = currentRound(this.state.phase);
     if (!round) throw new GameError('Decisions are not open right now.');
     const price = Number(rawPrice);
-    if (!PRICE_OPTIONS.includes(price as Price)) throw new GameError('Invalid price.');
+    if (!isGridPrice(price)) throw new GameError('Invalid price.');
     const existing = this.state.decisions[round][player.id];
     if (existing !== undefined) return { price: existing, duplicate: true };
-    this.state.decisions[round][player.id] = price as Price;
-    this.state.demoSchedule = this.state.demoSchedule.filter((d) => d.playerId !== player.id);
+    if (round === 2 && this.state.guesses[player.id] === undefined) {
+      throw new GameError('Answer the Round 1 question first.');
+    }
+    this.state.decisions[round][player.id] = price;
+    this.state.demoSchedule = this.state.demoSchedule.filter((d) => !(d.playerId === player.id && d.kind === 'price'));
     if (this.allSubmitted(round)) this.resolve(round);
     else this.changed();
-    return { price: price as Price, duplicate: false };
+    return { price, duplicate: false };
+  }
+
+  /** Round 2: name your Round 1 primary competitor. Once only. */
+  guess(token: unknown, rawId: unknown): { correct: boolean } {
+    const player = this.playerByToken(token);
+    if (!player) throw new GameError('Unknown player. Please rejoin.');
+    if (this.state.phase !== 'r2_decision') throw new GameError('The question is only open during Round 2.');
+    if (this.state.guesses[player.id] !== undefined) throw new GameError('You have already answered.');
+    const id = String(rawId ?? '');
+    const options = this.quizOptions(player);
+    if (!options.some((o) => o.id === id)) throw new GameError('Pick one of the listed competitors.');
+    this.state.guesses[player.id] = id;
+    this.state.demoSchedule = this.state.demoSchedule.filter((d) => !(d.playerId === player.id && d.kind === 'guess'));
+    this.changed();
+    return { correct: id === this.r1Result(player)?.primaryCompetitorId };
   }
 
   private allSubmitted(round: RoundNo): boolean {
@@ -251,17 +328,21 @@ export class Game {
     const round = currentRound(s.phase);
     if (!round) return;
     const now = this.now();
-    const due = s.demoSchedule.filter((d) => d.round === round && d.at <= now && !s.timer?.paused);
-    for (const d of due) {
-      const p = s.players.find((x) => x.id === d.playerId);
-      if (p && s.decisions[round][p.id] === undefined) {
-        this.submit(p.token, d.price);
+    if (!s.timer?.paused) {
+      const due = s.demoSchedule.filter((d) => d.round === round && d.at <= now).sort((a, b) => a.at - b.at);
+      for (const d of due) {
         if (currentRound(this.state.phase) !== round) return;
+        const p = s.players.find((x) => x.id === d.playerId);
+        s.demoSchedule = s.demoSchedule.filter((x) => x !== d);
+        if (!p) continue;
+        try {
+          if (d.kind === 'guess' && s.guesses[p.id] === undefined) this.guess(p.token, d.competitorId);
+          if (d.kind === 'price' && s.decisions[round][p.id] === undefined) this.submit(p.token, d.price);
+        } catch {
+          /* a demo action that is no longer valid is simply dropped */
+        }
       }
-    }
-    if (due.length) {
-      s.demoSchedule = s.demoSchedule.filter((d) => !due.includes(d));
-      this.changed();
+      if (currentRound(this.state.phase) !== round) return;
     }
     if (s.timer && !s.timer.paused && s.timer.endsAt !== null && now >= s.timer.endsAt) {
       this.resolve(round);
@@ -271,43 +352,22 @@ export class Game {
   // --------------------------------------------------------------------------
   //  Rounds
   // --------------------------------------------------------------------------
-  private createAi() {
-    const s = this.state;
-    const count = Math.max(0, MIN_COMPETITORS - s.players.length);
-    s.ai = AI_ARCHETYPES.slice(0, count).map((a, i) => ({
-      id: `AI${String(i + 1).padStart(2, '0')}`,
-      name: a.name,
-      archetypeIndex: i,
-      archetype: a.archetype,
-      customerValue: a.customerValue,
-      elasticity: a.elasticity,
-      variableCost: a.variableCost,
-      fixedCost: a.fixedCost,
-    }));
-  }
-
   private startRound(round: RoundNo) {
     const s = this.state;
     if (round === 1) {
       if (s.phase !== 'registration') throw new GameError('Round 1 can only start from registration.');
       if (s.players.length === 0) throw new GameError('At least one participant must join first.');
       s.registrationOpen = false;
-      this.createAi();
-      s.aiDecisions['1'] = Object.fromEntries(
-        s.ai.map((a) => [a.id, aiRound1Decision(s.seed, a.id, AI_ARCHETYPES[a.archetypeIndex])]),
-      );
+      this.assignMarkets();
+      s.aiDecisions['1'] = Object.fromEntries(s.ai.map((a) => [a.id, aiRound1Decision(s.seed, a.id, a.letter)]));
     } else {
       if (!['r1_results', 'workshop', 'r1_clearing'].includes(s.phase)) {
         throw new GameError('Round 2 can start after Round 1 has been revealed.');
       }
       if (!s.rounds['1']) throw new GameError('Round 1 has not been resolved.');
-      const r1 = s.rounds['1'];
-      const entries = this.entriesFor(1);
+      s.guesses = {};
       s.aiDecisions['2'] = Object.fromEntries(
-        s.ai.map((a) => [
-          a.id,
-          aiRound2Decision(s.seed, a.id, AI_ARCHETYPES[a.archetypeIndex], round2Context(r1, entries, a.id)),
-        ]),
+        s.ai.map((a) => [a.id, aiRound2Decision(s.seed, a.id, a.letter, this.round2Context(a.id, a.marketIndex))]),
       );
     }
     const seconds = round === 1 ? s.r1Seconds : s.r2Seconds;
@@ -319,63 +379,82 @@ export class Game {
     this.changed();
   }
 
-  private scheduleDemo(round: RoundNo, durationMs: number) {
-    const s = this.state;
-    const r1 = s.rounds['1'];
-    const entries = round === 2 ? this.entriesFor(1) : [];
-    const [lo, hi] = this.demoWindow;
-    s.demoSchedule = s.players
-      .filter((p) => p.isDemo)
-      .map((p) => {
-        const e = PROFILE_BY_ID[p.profileId];
-        const price =
-          round === 1
-            ? demoRound1Decision(s.seed, p.id, e)
-            : demoRound2Decision(s.seed, p.id, e, round2Context(r1!, entries, p.id));
-        const r = rngFor(s.seed, 'demo-delay', p.id, round)();
-        return { playerId: p.id, round, price, at: this.now() + durationMs * (lo + (hi - lo) * r) };
-      });
+  /** What a company knows going into Round 2, from its Round 1 market. */
+  private round2Context(id: string, marketIndex: number): Round2Context {
+    const m = this.state.rounds['1']!.markets[marketIndex];
+    const me = m.results.find((r) => r.id === id)!;
+    const pc = m.results.find((r) => r.id === me.primaryCompetitorId);
+    return { r1Price: me.price, bestResponse: me.bestPrice, pcPrice: pc?.price ?? me.price, captured: me.captured };
   }
 
-  /** Market entries for a round using the decisions (or defaults) of that round. */
-  entriesFor(round: RoundNo, override?: (e: MarketEntry) => Price): MarketEntry[] {
+  private scheduleDemo(round: RoundNo, durationMs: number) {
     const s = this.state;
-    const human: MarketEntry[] = s.players.map((p) => {
-      const prof = PROFILE_BY_ID[p.profileId];
-      const decided = s.decisions[round][p.id];
-      return {
-        id: p.id,
-        kind: 'human',
-        customerValue: prof.customerValue,
-        elasticity: prof.elasticity,
-        variableCost: prof.variableCost,
-        fixedCost: prof.fixedCost,
-        price: decided ?? (DEFAULT_PRICE as Price),
-        defaulted: decided === undefined,
-      };
-    });
-    const ai: MarketEntry[] = s.ai.map((a) => ({
-      id: a.id,
-      kind: 'ai',
-      customerValue: a.customerValue,
-      elasticity: a.elasticity,
-      variableCost: a.variableCost,
-      fixedCost: a.fixedCost,
-      price: s.aiDecisions[round][a.id] ?? (DEFAULT_PRICE as Price),
-    }));
-    const all = [...human, ...ai];
-    return override ? all.map((e) => ({ ...e, price: override(e), defaulted: false })) : all;
+    const [lo, hi] = this.demoWindow;
+    const events: DemoEvent[] = [];
+    for (const p of s.players.filter((x) => x.isDemo)) {
+      const r = rngFor(s.seed, 'demo-delay', p.id, round)();
+      const at = this.now() + durationMs * (lo + (hi - lo) * r);
+      if (round === 1) {
+        events.push({ playerId: p.id, round, at, kind: 'price', price: demoRound1Decision(s.seed, p.id, letterOf(p)) });
+      } else {
+        const options = this.quizOptions(p).map((o) => o.id);
+        const correct = this.r1Result(p)!.primaryCompetitorId;
+        events.push({ playerId: p.id, round, at: at - durationMs * lo * 0.5, kind: 'guess', competitorId: demoGuess(s.seed, p.id, options, correct) });
+        events.push({ playerId: p.id, round, at, kind: 'price', price: demoRound2Decision(s.seed, p.id, this.round2Context(p.id, p.marketIndex!)) });
+      }
+    }
+    s.demoSchedule = events;
+  }
+
+  private defaultPrice(round: RoundNo, id: string): Price {
+    if (round === 1) return DEFAULT_PRICE_R1;
+    const r1 = this.state.rounds['1']?.markets.flatMap((m) => m.results).find((r) => r.id === id);
+    return r1?.price ?? DEFAULT_PRICE_R1;
+  }
+
+  /** The ten companies of one market, with the prices of a round (or an override). */
+  entriesFor(round: RoundNo, marketIndex: number, override?: (letter: Letter) => number): MarketEntry[] {
+    const s = this.state;
+    const human: MarketEntry[] = s.players
+      .filter((p) => p.marketIndex === marketIndex)
+      .map((p) => {
+        const decided = s.decisions[round][p.id];
+        return {
+          id: p.id,
+          kind: 'human',
+          letter: letterOf(p),
+          company: PROFILE_BY_ID[p.profileId].company,
+          price: decided ?? this.defaultPrice(round, p.id),
+          defaulted: decided === undefined,
+        };
+      });
+    const ai: MarketEntry[] = s.ai
+      .filter((a) => a.marketIndex === marketIndex)
+      .map((a) => ({ id: a.id, kind: 'ai', letter: a.letter, company: a.name, price: s.aiDecisions[round][a.id] ?? this.defaultPrice(round, a.id) }));
+    const all = [...human, ...ai].sort((a, b) => a.letter.localeCompare(b.letter));
+    return override ? all.map((e) => ({ ...e, price: override(e.letter), defaulted: false })) : all;
   }
 
   private resolve(round: RoundNo) {
     const s = this.state;
     if (s.phase !== DECISION_PHASE[round]) return;
-    const outcome = clearMarket(this.entriesFor(round));
+    const markets: MarketRecord[] = [];
+    for (let m = 0; m < s.marketCount; m++) {
+      const o = clearMarket(this.entriesFor(round, m), m);
+      markets.push({ index: m, humans: s.players.filter((p) => p.marketIndex === m).length, ...o });
+    }
+    const all = markets.flatMap((m) => m.results);
     s.rounds[round] = {
       round,
       resolvedAt: this.now(),
+      totalCompetitors: all.length,
       humans: s.players.length,
-      ...outcome,
+      avgPrice: all.reduce((a, r) => a + r.price, 0) / all.length,
+      totalUnits: markets.reduce((a, m) => a + m.totalUnits, 0),
+      totalRevenue: markets.reduce((a, m) => a + m.totalRevenue, 0),
+      totalProfit: markets.reduce((a, m) => a + m.totalProfit, 0),
+      moves: moveStats(all.map((r) => r.price)),
+      markets,
     };
     s.timer = null;
     s.demoSchedule = [];
@@ -405,10 +484,10 @@ export class Game {
         return this.startRound(action.round);
       case 'pause':
         if (!round || !s.timer || s.timer.paused) throw new GameError('Nothing to pause.');
-        s.timer = { ...s.timer, remainingMs: this.remaining(s.timer), endsAt: null, paused: true };
         {
           const now = this.now();
-          s.demoSchedule = s.demoSchedule.map((d) => ({ ...d, at: d.at - now })); // store as offsets while paused
+          s.timer = { ...s.timer, remainingMs: this.remaining(s.timer), endsAt: null, paused: true };
+          s.demoSchedule = s.demoSchedule.map((d) => ({ ...d, at: d.at - now })); // offsets while paused
         }
         break;
       case 'resume':
@@ -424,9 +503,10 @@ export class Game {
         const ms = Math.round(Number(action.seconds) * 1000);
         if (!Number.isFinite(ms)) throw new GameError('Invalid time.');
         const remainingMs = Math.max(1000, this.remaining(s.timer) + ms);
+        const durationMs = Math.max(s.timer.durationMs, remainingMs);
         s.timer = s.timer.paused
-          ? { ...s.timer, remainingMs, durationMs: Math.max(s.timer.durationMs, remainingMs) }
-          : { ...s.timer, endsAt: this.now() + remainingMs, remainingMs, durationMs: Math.max(s.timer.durationMs, remainingMs) };
+          ? { ...s.timer, remainingMs, durationMs }
+          : { ...s.timer, endsAt: this.now() + remainingMs, remainingMs, durationMs };
         break;
       }
       case 'endRound':
@@ -447,8 +527,8 @@ export class Game {
         break;
       case 'loadDemo': {
         if (s.phase !== 'registration') throw new GameError('Demo players can only be added during registration.');
+        if (s.players.length >= MAX_HUMANS) throw new GameError('The room is already full.');
         const count = Math.max(1, Math.min(Number(action.count) || 0, MAX_HUMANS - s.players.length));
-        if (s.players.length >= MAX_HUMANS) throw new GameError('The market is already full.');
         const wasOpen = s.registrationOpen;
         s.registrationOpen = true;
         for (let i = 0; i < count; i++) this.join(`Demo participant ${s.players.length + 1}`, s.code, true);
@@ -464,7 +544,7 @@ export class Game {
         break;
       case 'setDuration': {
         const secs = Math.round(Number(action.seconds));
-        if (!(secs >= 15 && secs <= 900)) throw new GameError('Duration must be 15 to 900 seconds.');
+        if (!(secs >= 15 && secs <= 1200)) throw new GameError('Duration must be 15 to 1,200 seconds.');
         if (action.round === 1) s.r1Seconds = secs;
         else s.r2Seconds = secs;
         break;
@@ -476,57 +556,158 @@ export class Game {
   }
 
   // --------------------------------------------------------------------------
-  //  Views
+  //  Player views
   // --------------------------------------------------------------------------
-  private publicMarket(round: RoundNo): PublicMarketInfo | undefined {
-    const r = this.state.rounds[round];
-    if (!r || !isRevealed(this.state.phase, round)) return undefined;
-    return {
-      round,
-      avgPrice: r.avgPrice,
-      totalDemand: r.totalDemand,
-      pctCut: r.moves.pctCut,
-      pctHold: r.moves.pctHold,
-      pctRaise: r.moves.pctRaise,
-    };
+  private marketRecord(round: RoundNo, marketIndex: number | null): MarketRecord | undefined {
+    if (marketIndex === null) return undefined;
+    return this.state.rounds[round]?.markets[marketIndex];
   }
 
-  private myResult(round: RoundNo, playerId: string): MyRoundResult | undefined {
-    const r = this.state.rounds[round];
-    if (!r || !isRevealed(this.state.phase, round)) return undefined;
-    const me = r.results.find((x) => x.id === playerId);
-    if (!me) return undefined;
+  private r1Result(p: StoredPlayer): CompetitorResult | undefined {
+    return this.marketRecord(1, p.marketIndex)?.results.find((r) => r.id === p.id);
+  }
+
+  private competitorRows(m: MarketRecord, me: CompetitorResult): CompetitorRow[] {
+    return m.results
+      .filter((r) => r.id !== me.id)
+      .map((r) => ({
+        id: r.id,
+        company: r.company,
+        segment: COMPANY_BY_LETTER[r.letter].segment,
+        letter: r.letter,
+        similarity: similarity(me.letter, r.letter),
+        price: r.price,
+      }))
+      .sort((a, b) => b.similarity - a.similarity || a.letter.localeCompare(b.letter));
+  }
+
+  private flowRows(m: MarketRecord, me: CompetitorResult): FlowRow[] {
+    const entries = entriesFromRecord(m);
+    const idx = entries.findIndex((e) => e.id === me.id);
+    return flowsFor(entries, idx)
+      .map((f) => ({ id: f.id, company: f.company, similarity: f.similarity, customers: Math.round(f.flow) }))
+      .sort((a, b) => Math.abs(b.customers) - Math.abs(a.customers) || b.similarity - a.similarity);
+  }
+
+  private myResult(round: RoundNo, p: StoredPlayer): MyRoundResult | undefined {
+    if (!isRevealed(this.state.phase, round)) return undefined;
+    const m = this.marketRecord(round, p.marketIndex);
+    const me = m?.results.find((r) => r.id === p.id);
+    if (!m || !me) return undefined;
+    const prof = PROFILE_BY_ID[p.profileId];
+    const flowsAllowed = round === 2 || this.state.guesses[p.id] !== undefined || isRevealed(this.state.phase, 2);
     return {
       round,
       price: me.price,
       defaulted: me.defaulted,
-      marketShare: me.marketShare,
       units: me.units,
       revenue: me.revenue,
       variableCostTotal: me.variableCostTotal,
       fixedCost: me.fixedCost,
       profit: me.profit,
+      share: me.share,
+      startCustomers: prof.startCustomers,
+      startShare: me.startShare,
+      shareChangePp: me.shareChangePp,
+      statusQuoProfit: me.statusQuoProfit,
       profitRank: me.profitRank,
-      shareRank: me.shareRank,
-      totalCompetitors: r.totalCompetitors,
-      avgPrice: r.avgPrice,
-      totalDemand: r.totalDemand,
+      marketSize: m.results.length,
+      dossierRightPrice: prof.rightPrice,
+      bestGivenCompetitors: { price: me.bestPrice, profit: me.bestProfit },
+      competitors: this.competitorRows(m, me),
+      ...(flowsAllowed ? { flows: this.flowRows(m, me), primaryCompetitorId: me.primaryCompetitorId } : {}),
+    };
+  }
+
+  /** Four most similar competitors, always including the true primary competitor; seeded order. */
+  quizOptions(p: StoredPlayer): QuizOption[] {
+    const m = this.marketRecord(1, p.marketIndex);
+    const me = m?.results.find((r) => r.id === p.id);
+    if (!m || !me) return [];
+    const rows = this.competitorRows(m, me);
+    const top = rows.slice(0, 4);
+    if (!top.some((r) => r.id === me.primaryCompetitorId)) {
+      top[3] = rows.find((r) => r.id === me.primaryCompetitorId)!;
+    }
+    return shuffle(top, rngFor(this.state.seed, 'quiz', p.id)).map((r) => ({
+      id: r.id,
+      company: r.company,
+      segment: r.segment,
+      similarity: r.similarity,
+      r1Price: r.price,
+    }));
+  }
+
+  /** Best response vs the primary competitor, everyone else held at Round 1 prices. */
+  private bestResponseTable(m: MarketRecord, me: CompetitorResult): BestResponseTable {
+    const entries = entriesFromRecord(m);
+    const myIdx = entries.findIndex((e) => e.id === me.id);
+    const rivalIdx = entries.findIndex((e) => e.id === me.primaryCompetitorId);
+    const rival = entries[rivalIdx];
+    const rivalPrices = [...new Set([-200, -100, 0, 100, 200].map((d) => snap(rival.price + d)))];
+    return {
+      rivalId: rival.id,
+      rivalCompany: rival.company,
+      rivalR1Price: rival.price,
+      reactionPer100: reactionPer100(me.letter, rival.letter),
+      rows: rivalPrices.map((rp) => {
+        const e = entries.map((x, i) => (i === rivalIdx ? { ...x, price: rp } : x));
+        const bestPrice = bestResponse(e, myIdx);
+        return { rivalPrice: rp, bestPrice, profit: paidProfit(e, myIdx, bestPrice) };
+      }),
+    };
+  }
+
+  private desk(p: StoredPlayer): Round2Desk | null {
+    if (!ROUND2_PHASES.includes(this.state.phase)) return null;
+    const m = this.marketRecord(1, p.marketIndex);
+    const me = m?.results.find((r) => r.id === p.id);
+    if (!m || !me) return null;
+    const guess = this.state.guesses[p.id] ?? null;
+    const showAnswer = guess !== null || isRevealed(this.state.phase, 2);
+    return {
+      options: this.quizOptions(p),
+      guess,
+      reveal: showAnswer
+        ? {
+            correct: guess === me.primaryCompetitorId,
+            primaryId: me.primaryCompetitorId,
+            primaryCompany: m.results.find((r) => r.id === me.primaryCompetitorId)?.company ?? '',
+            flows: this.flowRows(m, me),
+            table: this.bestResponseTable(m, me),
+          }
+        : null,
+    };
+  }
+
+  private publicMarket(round: RoundNo, marketIndex: number | null): PublicMarketInfo | undefined {
+    const m = this.marketRecord(round, marketIndex);
+    if (!m || !isRevealed(this.state.phase, round)) return undefined;
+    return {
+      round,
+      avgPrice: m.avgPrice,
+      totalUnits: m.totalUnits,
+      pctCut: m.moves.pctCut,
+      pctHold: m.moves.pctHold,
+      pctRaise: m.moves.pctRaise,
     };
   }
 
   playerView(player: StoredPlayer): PlayerView {
     const s = this.state;
+    const prof = PROFILE_BY_ID[player.profileId];
     const decisions: PlayerView['me']['decisions'] = {};
     const results: PlayerView['me']['results'] = {};
     const market: PlayerView['market'] = {};
     for (const r of [1, 2] as RoundNo[]) {
       const d = s.decisions[r][player.id];
       if (d !== undefined) decisions[r] = d;
-      const res = this.myResult(r, player.id);
+      const res = this.myResult(r, player);
       if (res) results[r] = res;
-      const m = this.publicMarket(r);
-      if (m) market[r] = m;
+      const pm = this.publicMarket(r, player.marketIndex);
+      if (pm) market[r] = pm;
     }
+    const q0Total = COMPANIES.reduce((a, c) => a + c.startCustomers, 0);
     return {
       kind: 'player',
       serverNow: this.now(),
@@ -535,18 +716,26 @@ export class Game {
         id: player.id,
         name: player.name,
         codename: player.codename,
-        profile: PROFILE_BY_ID[player.profileId],
+        profile: prof,
+        marketIndex: player.marketIndex,
+        start: s.phase === 'registration' ? null : { customers: prof.startCustomers, share: prof.startCustomers / q0Total },
         decisions,
         results,
       },
       market,
+      desk: this.desk(player),
     };
   }
 
+  // --------------------------------------------------------------------------
+  //  Host views
+  // --------------------------------------------------------------------------
   hostView(): HostView {
     const s = this.state;
     const round = currentRound(s.phase);
-    const aiCount = s.ai.length || Math.max(0, MIN_COMPETITORS - s.players.length);
+    const markets = s.marketCount || this.projectedMarkets();
+    const aiCount = s.marketCount ? s.ai.length : markets * MARKET_SIZE - s.players.length;
+    const r1All = s.rounds['1']?.markets.flatMap((m) => m.results) ?? [];
     return {
       kind: 'host',
       serverNow: this.now(),
@@ -565,118 +754,202 @@ export class Game {
         humans: s.players.length,
         maxHumans: MAX_HUMANS,
         connected: s.players.filter((p) => this.connected.has(p.id)).length,
+        markets,
         totalCompetitors: s.players.length + aiCount,
         aiCompetitors: aiCount,
         submissions: round ? Object.keys(s.decisions[round]).length : 0,
         expectedSubmissions: s.players.length,
+        guesses: Object.keys(s.guesses).length,
       },
       players: s.players.map((p) => {
         const prof = PROFILE_BY_ID[p.profileId];
+        const g = s.guesses[p.id];
+        const r1 = r1All.find((r) => r.id === p.id);
         return {
           id: p.id,
           name: p.name,
           codename: p.codename,
+          letter: prof.letter,
           archetype: prof.archetype,
           company: prof.company,
           isDemo: p.isDemo,
           connected: this.connected.has(p.id),
+          marketIndex: p.marketIndex,
           token: p.isDemo ? p.token : undefined,
-          decisions: { ...(s.decisions['1'][p.id] ? { 1: s.decisions['1'][p.id] } : {}), ...(s.decisions['2'][p.id] ? { 2: s.decisions['2'][p.id] } : {}) },
+          decisions: {
+            ...(s.decisions['1'][p.id] !== undefined ? { 1: s.decisions['1'][p.id] } : {}),
+            ...(s.decisions['2'][p.id] !== undefined ? { 2: s.decisions['2'][p.id] } : {}),
+          },
+          guess: g ? { company: r1All.find((r) => r.id === g)?.company ?? g, correct: g === r1?.primaryCompetitorId } : null,
         };
       }),
-      ai: s.ai.map((a) => ({
-        id: a.id,
-        name: a.name,
-        archetype: a.archetype,
-        economics: { customerValue: a.customerValue, elasticity: a.elasticity, variableCost: a.variableCost, fixedCost: a.fixedCost },
-        // Only show AI decisions once the round has cleared.
-        decisions: {
-          ...(s.rounds['1'] ? { 1: s.aiDecisions['1'][a.id] } : {}),
-          ...(s.rounds['2'] ? { 2: s.aiDecisions['2'][a.id] } : {}),
-        },
-      })),
+      ai: s.ai.map((a) => {
+        const c = COMPANY_BY_LETTER[a.letter];
+        return {
+          id: a.id,
+          name: a.name,
+          letter: a.letter,
+          archetype: c.archetype,
+          personality: c.personality,
+          marketIndex: a.marketIndex,
+          vc: c.vc,
+          fc: c.fc,
+          rightPrice: c.rightPrice,
+          // Only show AI decisions once the round has cleared.
+          decisions: {
+            ...(s.rounds['1'] ? { 1: s.aiDecisions['1'][a.id] } : {}),
+            ...(s.rounds['2'] ? { 2: s.aiDecisions['2'][a.id] } : {}),
+          },
+        };
+      }),
       rounds: { ...(s.rounds['1'] ? { 1: s.rounds['1'] } : {}), ...(s.rounds['2'] ? { 2: s.rounds['2'] } : {}) },
       debrief: s.rounds['1'] ? this.debrief() : null,
     };
   }
 
+  /** Sum a whole-room scenario across all markets. */
+  private scenario(key: string, label: string, price: (l: Letter) => number): ScenarioOutcome {
+    let n = 0, units = 0, revenue = 0, profit = 0, priceSum = 0;
+    for (let m = 0; m < this.state.marketCount; m++) {
+      const o = clearMarket(this.entriesFor(1, m, price), m);
+      n += o.results.length;
+      units += o.totalUnits;
+      revenue += o.totalRevenue;
+      profit += o.totalProfit;
+      priceSum += o.results.reduce((a, r) => a + r.price, 0);
+    }
+    return { key, label, avgPrice: priceSum / (n || 1), totalUnits: units, totalRevenue: revenue, totalProfit: profit, avgProfit: profit / (n || 1) };
+  }
+
+  private actualScenario(key: string, label: string, rec: RoundRecord): ScenarioOutcome {
+    return {
+      key,
+      label,
+      avgPrice: rec.avgPrice,
+      totalUnits: rec.totalUnits,
+      totalRevenue: rec.totalRevenue,
+      totalProfit: rec.totalProfit,
+      avgProfit: rec.totalProfit / rec.totalCompetitors,
+    };
+  }
+
   debrief(): Debrief {
     const s = this.state;
+    const r1 = s.rounds['1'];
+    const r2 = s.rounds['2'];
+    const allOf = (rec?: RoundRecord) => rec?.markets.flatMap((m) => m.results) ?? [];
+    const a1 = allOf(r1);
+    const a2 = allOf(r2);
     const humanIds = new Set(s.players.map((p) => p.id));
+    const h1 = a1.filter((r) => humanIds.has(r.id));
+    const h2 = a2.filter((r) => humanIds.has(r.id));
+
     const rounds: Debrief['rounds'] = {};
-    for (const r of [1, 2] as RoundNo[]) {
-      const rec = s.rounds[r];
+    for (const [r, rec] of [[1, r1], [2, r2]] as const) {
       if (!rec) continue;
-      const n = rec.results.length;
-      const humanRes = rec.results.filter((x) => humanIds.has(x.id));
-      const hist = Object.fromEntries(PRICE_OPTIONS.map((p) => [p, 0])) as Record<Price, number>;
-      rec.results.forEach((x) => hist[x.price]++);
+      const hist: Record<number, number> = Object.fromEntries(PRICE_OPTIONS.map((p) => [p, 0]));
+      allOf(rec).forEach((x) => (hist[x.price] = (hist[x.price] ?? 0) + 1));
       rounds[r] = {
         avgPrice: rec.avgPrice,
-        avgProfit: rec.totalProfit / n,
-        avgRevenue: rec.totalRevenue / n,
-        avgShare: humanRes.length ? humanRes.reduce((a, x) => a + x.marketShare, 0) / humanRes.length : 1 / n,
-        moves: rec.moves,
-        totalDemand: rec.totalDemand,
+        avgProfit: rec.totalProfit / rec.totalCompetitors,
+        totalUnits: rec.totalUnits,
         totalRevenue: rec.totalRevenue,
         totalProfit: rec.totalProfit,
+        moves: rec.moves,
         priceHistogram: hist,
       };
     }
 
-    const scenario = (key: string, label: string, entries: MarketEntry[]) => {
-      const o = clearMarket(entries);
-      return {
-        key,
-        label,
-        avgPrice: o.avgPrice,
-        totalDemand: o.totalDemand,
-        totalRevenue: o.totalRevenue,
-        totalProfit: o.totalProfit,
-        avgProfit: o.totalProfit / o.totalCompetitors,
-      };
-    };
-    const counterfactuals = [
-      ...(s.rounds['1'] ? [scenario('actual1', 'Actual market · Round 1', this.entriesFor(1))] : []),
-      ...(s.rounds['2'] ? [scenario('actual2', 'Actual market · Round 2', this.entriesFor(2))] : []),
-      ...COUNTERFACTUALS.map((c) => scenario(c.key, c.label, this.entriesFor(1, () => c.price as Price))),
+    const right = (l: Letter) => COMPANY_BY_LETTER[l].rightPrice;
+    const counterfactuals: ScenarioOutcome[] = [
+      ...(r1 ? [this.actualScenario('actual1', 'Actual · Round 1', r1)] : []),
+      ...(r2 ? [this.actualScenario('actual2', 'Actual · Round 2', r2)] : []),
+      this.scenario('hold', 'Everyone holds at QAR 1,000', () => REFERENCE_PRICE),
+      this.scenario('right', 'Everyone at their dossier right price', right),
+      this.scenario('smbcut', 'Right prices, but SMB cluster (B, F, J) cuts 100', (l) =>
+        (SMB_CLUSTER as readonly string[]).includes(l) ? right(l) - 100 : right(l),
+      ),
     ];
 
-    const r1 = s.rounds['1'];
-    const r2 = s.rounds['2'];
-    const hr = (rec: RoundRecord | undefined) => (rec ? rec.results.filter((x) => humanIds.has(x.id)) : []);
-    const avg = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
-    const h1 = hr(r1);
-    const h2 = hr(r2);
+    const pct = (k: number, n: number) => (n ? k / n : null);
+    const rightOf = (id: string) => PROFILE_BY_ID[s.players.find((p) => p.id === id)!.profileId].rightPrice;
+    const guessed = s.players.filter((p) => s.guesses[p.id] !== undefined);
+    const correct = guessed.filter((p) => s.guesses[p.id] === h1.find((r) => r.id === p.id)?.primaryCompetitorId);
+
     const both = s.players.filter((p) => h1.some((x) => x.id === p.id) && h2.some((x) => x.id === p.id));
     const change = both.map((p) => h2.find((x) => x.id === p.id)!.price - h1.find((x) => x.id === p.id)!.price);
-    const pct = (k: number) => (both.length ? k / both.length : null);
 
-    const byId = (rec: RoundRecord | undefined, id: string): CompetitorResult | undefined => rec?.results.find((x) => x.id === id);
-    const leaderboard = [
-      ...s.players.map((p) => ({ id: p.id, label: `${p.codename} · ${p.name}`, kind: 'human' as const, archetype: PROFILE_BY_ID[p.profileId].archetype })),
-      ...s.ai.map((a) => ({ id: a.id, label: `${a.name} (AI)`, kind: 'ai' as const, archetype: a.archetype })),
-    ].map((row) => ({
-      ...row,
-      r1Profit: byId(r1, row.id)?.profit ?? null,
-      r2Profit: byId(r2, row.id)?.profit ?? null,
-      r1Price: byId(r1, row.id)?.price ?? null,
-      r2Price: byId(r2, row.id)?.price ?? null,
-    }));
+    const qRound: RoundNo = r2 ? 2 : 1;
+    const qAll = qRound === 2 ? a2 : a1;
+    const playerById = new Map(s.players.map((p) => [p.id, p]));
+    const quadrant = qAll.map((r) => {
+      const p = playerById.get(r.id);
+      return {
+        id: r.id,
+        kind: r.kind,
+        label: p ? `${p.codename} · ${r.company}` : `${r.company} (AI)`,
+        x: r.shareChangePp,
+        y: r.statusQuoProfit !== 0 ? ((r.profit - r.statusQuoProfit) / Math.abs(r.statusQuoProfit)) * 100 : 0,
+      };
+    });
+
+    const byId2 = new Map(a2.map((r) => [r.id, r]));
+    const leaderboard: LeaderRow[] = a1.map((x) => {
+      const p = playerById.get(x.id);
+      const y = byId2.get(x.id);
+      const g = p ? s.guesses[p.id] : undefined;
+      return {
+        id: x.id,
+        kind: x.kind,
+        player: p ? `${p.codename} · ${p.name}` : null,
+        company: x.company,
+        letter: x.letter,
+        archetype: COMPANY_BY_LETTER[x.letter].archetype,
+        market: x.marketIndex,
+        r1Price: x.price,
+        r2Price: y?.price ?? null,
+        r1Profit: x.profit,
+        r2Profit: y?.profit ?? null,
+        r1SharePp: x.shareChangePp,
+        r2SharePp: y?.shareChangePp ?? null,
+        guessCorrect: g === undefined ? null : g === x.primaryCompetitorId,
+      };
+    });
+    leaderboard.sort((a, b) => (b.r2Profit ?? b.r1Profit ?? 0) - (a.r2Profit ?? a.r1Profit ?? 0));
 
     return {
       rounds,
       counterfactuals,
-      learning: {
+      stats: {
         humans: s.players.length,
+        pctAtRightR1: pct(h1.filter((r) => r.price === rightOf(r.id)).length, h1.length),
+        pctNearRightR1: pct(h1.filter((r) => Math.abs(r.price - rightOf(r.id)) <= 50).length, h1.length),
+        guesses: guessed.length,
+        pctGuessCorrect: pct(correct.length, guessed.length),
+        medianCapturedR1: median(h1.map((r) => r.captured).filter((c): c is number => c !== null)),
+        medianCapturedR2: median(h2.map((r) => r.captured).filter((c): c is number => c !== null)),
+      },
+      learning: {
         avgProfitR1: avg(h1.map((x) => x.profit)),
         avgProfitR2: avg(h2.map((x) => x.profit)),
         avgPriceR1: avg(h1.map((x) => x.price)),
         avgPriceR2: avg(h2.map((x) => x.price)),
-        pctChanged: pct(change.filter((c) => c !== 0).length),
-        pctUp: pct(change.filter((c) => c > 0).length),
-        pctDown: pct(change.filter((c) => c < 0).length),
+        pctChanged: pct(change.filter((c) => c !== 0).length, both.length),
+        pctUp: pct(change.filter((c) => c > 0).length, both.length),
+        pctDown: pct(change.filter((c) => c < 0).length, both.length),
       },
+      markets: Array.from({ length: s.marketCount }, (_, i) => {
+        const m1 = r1?.markets[i];
+        const m2 = r2?.markets[i];
+        return {
+          index: i,
+          humans: s.players.filter((p) => p.marketIndex === i).length,
+          r1: m1 ? { avgPrice: m1.avgPrice, totalProfit: m1.totalProfit } : null,
+          r2: m2 ? { avgPrice: m2.avgPrice, totalProfit: m2.totalProfit } : null,
+        };
+      }),
+      quadrantRound: qRound,
+      quadrant,
       leaderboard,
     };
   }
@@ -687,21 +960,31 @@ export class Game {
   playersCsv(): string {
     const s = this.state;
     const cols = [
-      'player_id', 'name', 'codename', 'company_archetype', 'company', 'is_demo', 'customer_value', 'elasticity', 'variable_cost', 'fixed_cost',
-      'round1_price', 'round1_defaulted', 'round1_market_share', 'round1_units', 'round1_revenue', 'round1_profit',
-      'round2_price', 'round2_defaulted', 'round2_market_share', 'round2_units', 'round2_revenue', 'round2_profit',
+      'player_id', 'name', 'codename', 'is_demo', 'market', 'archetype_letter', 'company_archetype', 'company',
+      'variable_cost', 'fixed_cost', 'right_price', 'max_wtp', 'start_customers', 'start_share',
+      'round1_price', 'round1_defaulted', 'round1_units', 'round1_market_share', 'round1_share_change_pp', 'round1_revenue', 'round1_profit',
+      'round1_best_price_given_competitors', 'round1_profit_captured', 'primary_competitor_r1', 'guess', 'guess_correct',
+      'round2_price', 'round2_defaulted', 'round2_units', 'round2_market_share', 'round2_share_change_pp', 'round2_revenue', 'round2_profit',
+      'round2_best_price_given_competitors', 'round2_profit_captured', 'r2_primary_competitor',
       'price_change', 'market_share_change', 'revenue_change', 'profit_change',
     ];
+    const find = (rec: RoundRecord | undefined, id: string) => rec?.markets.flatMap((m) => m.results).find((r) => r.id === id);
+    const nameOf = (rec: RoundRecord | undefined, id: string | undefined) =>
+      id ? rec?.markets.flatMap((m) => m.results).find((r) => r.id === id)?.company ?? id : '';
     const rows = s.players.map((p) => {
       const prof = PROFILE_BY_ID[p.profileId];
-      const a = s.rounds['1']?.results.find((x) => x.id === p.id);
-      const b = s.rounds['2']?.results.find((x) => x.id === p.id);
-      const d = (f: (x: CompetitorResult) => number) => (a && b ? f(b) - f(a) : '');
+      const a = find(s.rounds['1'], p.id);
+      const b = find(s.rounds['2'], p.id);
+      const g = s.guesses[p.id];
+      const cap = (x?: CompetitorResult) => (x?.captured != null ? x.captured.toFixed(4) : '');
       return [
-        p.id, p.name, p.codename, prof.archetype, prof.company, p.isDemo, prof.customerValue, prof.elasticity, prof.variableCost, prof.fixedCost,
-        a?.price ?? '', a ? a.defaulted : '', a ? a.marketShare.toFixed(5) : '', a?.units ?? '', a ? Math.round(a.revenue) : '', a ? Math.round(a.profit) : '',
-        b?.price ?? '', b ? b.defaulted : '', b ? b.marketShare.toFixed(5) : '', b?.units ?? '', b ? Math.round(b.revenue) : '', b ? Math.round(b.profit) : '',
-        d((x) => x.price), a && b ? (b.marketShare - a.marketShare).toFixed(5) : '', a && b ? Math.round(b.revenue - a.revenue) : '', a && b ? Math.round(b.profit - a.profit) : '',
+        p.id, p.name, p.codename, p.isDemo, p.marketIndex !== null ? p.marketIndex + 1 : '', prof.letter, prof.archetype, prof.company,
+        prof.vc, prof.fc, prof.rightPrice, prof.maxWtp, prof.startCustomers, a ? a.startShare.toFixed(5) : '',
+        a?.price ?? '', a ? a.defaulted : '', a?.units ?? '', a ? a.share.toFixed(5) : '', a ? a.shareChangePp.toFixed(2) : '', a?.revenue ?? '', a?.profit ?? '',
+        a?.bestPrice ?? '', cap(a), nameOf(s.rounds['1'], a?.primaryCompetitorId), nameOf(s.rounds['1'], g), g && a ? g === a.primaryCompetitorId : '',
+        b?.price ?? '', b ? b.defaulted : '', b?.units ?? '', b ? b.share.toFixed(5) : '', b ? b.shareChangePp.toFixed(2) : '', b?.revenue ?? '', b?.profit ?? '',
+        b?.bestPrice ?? '', cap(b), nameOf(s.rounds['2'], b?.primaryCompetitorId),
+        a && b ? b.price - a.price : '', a && b ? ((b.share - a.share) * 100).toFixed(2) : '', a && b ? b.revenue - a.revenue : '', a && b ? b.profit - a.profit : '',
       ];
     });
     return toCsv([cols, ...rows]);
@@ -709,40 +992,32 @@ export class Game {
 
   marketCsv(): string {
     const s = this.state;
-    const lines: (string | number)[][] = [
-      ['section', 'metric', 'round1', 'round2'],
+    const lines: (string | number | boolean)[][] = [
+      ['section', 'market', 'round', 'avg_price', 'total_customers', 'total_revenue', 'total_profit', 'cut', 'hold', 'raise', 'humans'],
     ];
-    const r1 = s.rounds['1'];
-    const r2 = s.rounds['2'];
-    const m = (label: string, f: (r: RoundRecord) => number | string) =>
-      lines.push(['market', label, r1 ? f(r1) : '', r2 ? f(r2) : '']);
-    m('total_competitors', (r) => r.totalCompetitors);
-    m('human_competitors', (r) => r.humans);
-    m('average_price', (r) => r.avgPrice.toFixed(2));
-    m('demand_factor', (r) => r.demandFactor.toFixed(4));
-    m('total_market_demand', (r) => r.totalDemand.toFixed(1));
-    m('total_market_revenue', (r) => Math.round(r.totalRevenue));
-    m('total_market_profit', (r) => Math.round(r.totalProfit));
-    m('average_profit', (r) => Math.round(r.totalProfit / r.totalCompetitors));
-    m('count_cut', (r) => r.moves.cut);
-    m('count_hold', (r) => r.moves.hold);
-    m('count_raise', (r) => r.moves.raise);
-    if (r1) {
+    for (const r of [1, 2] as RoundNo[]) {
+      const rec = s.rounds[r];
+      if (!rec) continue;
+      for (const m of rec.markets) {
+        lines.push(['market', m.index + 1, r, m.avgPrice.toFixed(2), m.totalUnits, m.totalRevenue, m.totalProfit, m.moves.cut, m.moves.hold, m.moves.raise, m.humans]);
+      }
+      lines.push(['room', 'all', r, rec.avgPrice.toFixed(2), rec.totalUnits, rec.totalRevenue, rec.totalProfit, rec.moves.cut, rec.moves.hold, rec.moves.raise, rec.humans]);
+    }
+    if (s.rounds['1']) {
       lines.push([]);
-      lines.push(['counterfactual', 'scenario', 'total_demand', 'total_revenue', 'total_profit', 'avg_profit']);
+      lines.push(['counterfactual', 'scenario', 'avg_price', 'total_customers', 'total_revenue', 'total_profit', 'avg_profit']);
       for (const c of this.debrief().counterfactuals) {
-        lines.push(['counterfactual', c.label, c.totalDemand.toFixed(1), Math.round(c.totalRevenue), Math.round(c.totalProfit), Math.round(c.avgProfit)]);
+        lines.push(['counterfactual', c.label, c.avgPrice.toFixed(2), c.totalUnits, c.totalRevenue, c.totalProfit, Math.round(c.avgProfit)]);
       }
       lines.push([]);
-      lines.push(['competitor', 'id', 'kind', 'archetype', 'round1_price', 'round1_share', 'round1_profit', 'round2_price', 'round2_share', 'round2_profit']);
-      const all = [
-        ...s.players.map((p) => ({ id: p.id, kind: 'human', arch: PROFILE_BY_ID[p.profileId].archetype })),
-        ...s.ai.map((a) => ({ id: a.id, kind: 'ai', arch: a.archetype })),
-      ];
-      for (const c of all) {
-        const a = r1.results.find((x) => x.id === c.id);
-        const b = r2?.results.find((x) => x.id === c.id);
-        lines.push(['competitor', c.id, c.kind, c.arch, a?.price ?? '', a ? a.marketShare.toFixed(5) : '', a ? Math.round(a.profit) : '', b?.price ?? '', b ? b.marketShare.toFixed(5) : '', b ? Math.round(b.profit) : '']);
+      lines.push(['competitor', 'market', 'id', 'kind', 'letter', 'company', 'round1_price', 'round1_units', 'round1_share_change_pp', 'round1_profit', 'round2_price', 'round2_units', 'round2_share_change_pp', 'round2_profit']);
+      const r2 = s.rounds['2']?.markets.flatMap((m) => m.results) ?? [];
+      for (const a of s.rounds['1'].markets.flatMap((m) => m.results)) {
+        const b = r2.find((x) => x.id === a.id);
+        lines.push([
+          'competitor', a.marketIndex + 1, a.id, a.kind, a.letter, a.company, a.price, a.units, a.shareChangePp.toFixed(2), a.profit,
+          b?.price ?? '', b?.units ?? '', b ? b.shareChangePp.toFixed(2) : '', b?.profit ?? '',
+        ]);
       }
     }
     return toCsv(lines);
@@ -756,5 +1031,3 @@ function toCsv(rows: (string | number | boolean)[][]): string {
   };
   return rows.map((r) => r.map(esc).join(',')).join('\n') + '\n';
 }
-
-export { REFERENCE_PRICE };

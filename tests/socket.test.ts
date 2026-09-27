@@ -79,7 +79,27 @@ describe('socket protocol', () => {
     expect(acks.every((a) => a.ok)).toBe(true);
     const views = await Promise.all(results);
     expect(views.every((v) => v.me.results[1]!.revenue > 0)).toBe(true);
-    expect(game.state.rounds['1']!.results.filter((r) => r.kind === 'human' && !r.defaulted).length).toBe(15);
+    const all = game.state.rounds['1']!.markets.flatMap((m) => m.results);
+    expect(all.filter((r) => r.kind === 'human' && !r.defaulted).length).toBe(15);
+  });
+
+  it('Round 2: guess over the socket, then the reveal arrives in the view', async () => {
+    const host = await client();
+    await call(host, 'host:auth', { key: KEY });
+    const p = await client();
+    const token = (await call<{ token: string }>(p, 'player:join', { name: 'Q', code: game.state.code })).data!.token;
+    await call(host, 'host:action', { action: { type: 'startRound', round: 1 } });
+    await call(p, 'player:submit', { token, price: 900 });
+    await call(host, 'host:action', { action: { type: 'startRound', round: 2 } });
+    const early = await call(p, 'player:submit', { token, price: 900 });
+    expect(early.ok).toBe(false);
+    const view = (await call<{ view: PlayerView }>(p, 'player:resume', { token })).data!.view;
+    expect(view.desk!.reveal).toBeNull();
+    const g = await call<{ correct: boolean; view: PlayerView }>(p, 'player:guess', { token, competitorId: view.desk!.options[0].id });
+    expect(g.ok).toBe(true);
+    expect(g.data!.view.desk!.reveal).not.toBeNull();
+    expect((await call(p, 'player:guess', { token, competitorId: view.desk!.options[1].id })).ok).toBe(false);
+    expect((await call(p, 'player:submit', { token, price: 950 })).ok).toBe(true);
   });
 
   it('CSV export requires the host key', async () => {
