@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { Debrief as DebriefData, HostView, RoundNo } from '../../../shared/types';
-import { int, kqar, pct, qar } from '../lib';
+import type { HostView, LeaderRow, RoundNo } from '../../../shared/types';
+import { int, kqar, pct, pts, qar } from '../lib';
 import { Delta } from '../ui/common';
-import { CounterfactualBars, PriceDistribution } from './charts';
+import { CounterfactualBars, PriceDistribution, QuadrantScatter } from './charts';
 
 function Section({ n, title, children, aside }: { n: string; title: string; children: React.ReactNode; aside?: React.ReactNode }) {
   return (
@@ -19,149 +19,252 @@ function Section({ n, title, children, aside }: { n: string; title: string; chil
   );
 }
 
-type Row = { k: string; a?: number; b?: number; f: (n: number) => string; df?: (n: number) => string; neutral?: boolean };
-
-function CompareTable({ rows, hasR2 }: { rows: Row[]; hasR2: boolean }) {
+function Tile({ k, v, s }: { k: string; v: React.ReactNode; s?: React.ReactNode }) {
   return (
-    <table className="data">
-      <thead>
-        <tr>
-          <th>Metric</th>
-          <th className="r">Round 1</th>
-          {hasR2 && <th className="r">Round 2</th>}
-          {hasR2 && <th className="r">Change</th>}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r.k}>
-            <td>{r.k}</td>
-            <td className="r">{r.a !== undefined ? r.f(r.a) : '·'}</td>
-            {hasR2 && <td className="r strong">{r.b !== undefined ? r.f(r.b) : '·'}</td>}
-            {hasR2 && (
-              <td className="r">{r.a !== undefined && r.b !== undefined ? <Delta value={r.b - r.a} format={r.df ?? r.f} neutral={r.neutral} /> : '·'}</td>
-            )}
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div className="card stat">
+      <span className="k">{k}</span>
+      <span className="v" style={{ fontSize: 34 }}>
+        {v}
+      </span>
+      {s && <span className="s">{s}</span>}
+    </div>
   );
 }
 
+const orDot = (x: number | null, f: (n: number) => string) => (x === null ? '·' : f(x));
+
+/** Shown while a round's results are on screen. */
 export function RoundSummary({ view, round }: { view: HostView; round: RoundNo }) {
   const d = view.debrief?.rounds[round];
   const rec = view.rounds[round];
-  if (!d || !rec) return null;
+  const st = view.debrief?.stats;
+  if (!d || !rec || !st) return null;
   return (
     <section className="card pad stack">
       <div className="section-title" style={{ marginBottom: 0 }}>
-        <h2>Round {round} · market cleared</h2>
-        <span className="eyebrow">{rec.totalCompetitors} competitors · {rec.humans} human</span>
+        <h2>Round {round} · markets cleared</h2>
+        <span className="eyebrow">
+          {rec.markets.length} market{rec.markets.length === 1 ? '' : 's'} · {rec.totalCompetitors} companies · {rec.humans} human
+        </span>
       </div>
       <div className="stats">
-        <div className="card stat">
-          <span className="k">Average price</span>
-          <span className="v">{int(d.avgPrice)}</span>
-          <span className="s">QAR / month</span>
-        </div>
-        <div className="card stat">
-          <span className="k">Market demand</span>
-          <span className="v">{int(d.totalDemand)}</span>
-          <span className="s">customers (factor {rec.demandFactor.toFixed(3)})</span>
-        </div>
-        <div className="card stat">
-          <span className="k">Total market profit</span>
-          <span className="v">{kqar(d.totalProfit)}</span>
-          <span className="s">avg {qar(d.avgProfit)} per company</span>
-        </div>
-        <div className="card stat">
-          <span className="k">Cut · Hold · Raise</span>
-          <span className="v">
-            {d.moves.cut}·{d.moves.hold}·{d.moves.raise}
-          </span>
-          <span className="s">
-            {pct(d.moves.pctCut, 0)} cut · {pct(d.moves.pctHold, 0)} held · {pct(d.moves.pctRaise, 0)} raised
-          </span>
-        </div>
+        <Tile k="Average price" v={int(d.avgPrice)} s="QAR / month, all companies" />
+        <Tile k="Total profit" v={kqar(d.totalProfit)} s={`avg ${qar(d.avgProfit)} per company`} />
+        {round === 1 ? (
+          <Tile k="At dossier right price" v={orDot(st.pctAtRightR1, (x) => pct(x, 0))} s={`within ±50: ${orDot(st.pctNearRightR1, (x) => pct(x, 0))} of participants`} />
+        ) : (
+          <Tile k="Named primary competitor" v={orDot(st.pctGuessCorrect, (x) => pct(x, 0))} s={`${st.guesses} answers`} />
+        )}
+        <Tile k="Cut · Hold · Raise" v={`${d.moves.cut}·${d.moves.hold}·${d.moves.raise}`} s="vs QAR 1,000" />
       </div>
-      <PriceDistribution
-        r1={round === 1 ? d.priceHistogram : view.debrief?.rounds[1]?.priceHistogram}
-        r2={round === 2 ? d.priceHistogram : undefined}
-      />
+      <PriceDistribution r1={round === 1 ? d.priceHistogram : view.debrief?.rounds[1]?.priceHistogram} r2={round === 2 ? d.priceHistogram : undefined} />
     </section>
   );
 }
 
-export function Debrief({ view }: { view: HostView }) {
-  const d = view.debrief as DebriefData;
+type SortKey = 'r2Profit' | 'r1Profit' | 'r1SharePp' | 'r2SharePp';
+
+function Leaderboard({ rows, hasR2 }: { rows: LeaderRow[]; hasR2: boolean }) {
+  const [sort, setSort] = useState<SortKey>(hasR2 ? 'r2Profit' : 'r1Profit');
   const [showNames, setShowNames] = useState(false);
+  const [showAi, setShowAi] = useState(false);
+  const shown = rows
+    .filter((r) => showAi || r.kind === 'human')
+    .sort((a, b) => (b[sort] ?? -Infinity) - (a[sort] ?? -Infinity));
+  const th = (key: SortKey, label: string) => (
+    <th
+      className="r sortable"
+      aria-sort={sort === key ? 'descending' : 'none'}
+      tabIndex={0}
+      onClick={() => setSort(key)}
+      onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setSort(key)}
+    >
+      {label}
+    </th>
+  );
+  return (
+    <div className="stack-sm">
+      <div className="row" style={{ gap: 20 }}>
+        <label className="toggle">
+          <input type="checkbox" checked={showNames} onChange={(e) => setShowNames(e.target.checked)} /> Show names
+        </label>
+        <label className="toggle">
+          <input type="checkbox" checked={showAi} onChange={(e) => setShowAi(e.target.checked)} /> Include AI
+        </label>
+        <span className="faint" style={{ fontSize: 13 }}>
+          Click a profit or share column to sort.
+        </span>
+      </div>
+      <div className="scroll-x">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Player</th>
+              <th>Company</th>
+              <th>Mkt</th>
+              <th className="r">R1 price</th>
+              {hasR2 && <th className="r">R2 price</th>}
+              {th('r1Profit', 'R1 profit')}
+              {hasR2 && th('r2Profit', 'R2 profit')}
+              {th('r1SharePp', 'R1 share')}
+              {hasR2 && th('r2SharePp', 'R2 share')}
+              {hasR2 && <th className="r">Quiz</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((r, i) => (
+              <tr key={r.id} className={r.kind === 'ai' ? 'ai' : undefined}>
+                <td className="faint">{i + 1}</td>
+                <td>{r.kind === 'ai' ? <span className="tag ai">AI</span> : showNames ? r.player : r.player?.split(' · ')[0]}</td>
+                <td>
+                  {r.company} <span className="faint">({r.letter})</span>
+                </td>
+                <td>
+                  <span className="mkt">M{r.market + 1}</span>
+                </td>
+                <td className="r">{r.r1Price ?? '·'}</td>
+                {hasR2 && <td className="r">{r.r2Price ?? '·'}</td>}
+                <td className={`r${sort === 'r1Profit' ? ' strong' : ''}`}>{r.r1Profit !== null ? int(r.r1Profit) : '·'}</td>
+                {hasR2 && <td className={`r${sort === 'r2Profit' ? ' strong' : ''}`}>{r.r2Profit !== null ? int(r.r2Profit) : '·'}</td>}
+                <td className={`r${sort === 'r1SharePp' ? ' strong' : ''}`}>{r.r1SharePp !== null ? pts(r.r1SharePp) : '·'}</td>
+                {hasR2 && <td className={`r${sort === 'r2SharePp' ? ' strong' : ''}`}>{r.r2SharePp !== null ? pts(r.r2SharePp) : '·'}</td>}
+                {hasR2 && (
+                  <td className="r">
+                    {r.guessCorrect === null ? <span className="faint">·</span> : r.guessCorrect ? <span className="ok">✓</span> : <span className="no">✗</span>}
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+export function Debrief({ view }: { view: HostView }) {
+  const d = view.debrief!;
+  const [showAiDots, setShowAiDots] = useState(true);
   const a = d.rounds[1];
   const b = d.rounds[2];
   const hasR2 = !!b;
-  const hold = d.counterfactuals.find((c) => c.key === 'hold');
-  const cut = d.counterfactuals.find((c) => c.key === 'cut');
-  const actual = d.counterfactuals.find((c) => c.key === (hasR2 ? 'actual2' : 'actual1'));
+  const st = d.stats;
   const L = d.learning;
-  const lb = [...d.leaderboard].sort((x, y) => (y.r2Profit ?? y.r1Profit ?? 0) - (x.r2Profit ?? x.r1Profit ?? 0));
+  const cf = (k: string) => d.counterfactuals.find((c) => c.key === k);
+  const right = cf('right');
+  const hold = cf('hold');
+  const smb = cf('smbcut');
 
   return (
     <div className="stack-lg">
-      <Section n="01" title="Room behavior" aside={<span className="eyebrow">All competitors · humans + AI</span>}>
-        <CompareTable
-          hasR2={hasR2}
-          rows={[
-            { k: 'Average price (QAR)', a: a?.avgPrice, b: b?.avgPrice, f: int, neutral: true },
-            { k: 'Average profit (QAR)', a: a?.avgProfit, b: b?.avgProfit, f: int },
-            { k: 'Average revenue (QAR)', a: a?.avgRevenue, b: b?.avgRevenue, f: int },
-            { k: 'Average participant market share', a: a?.avgShare, b: b?.avgShare, f: (n) => pct(n), df: (n) => `${(n * 100).toFixed(1)} pts`, neutral: true },
-            { k: 'Cutting', a: a?.moves.pctCut, b: b?.moves.pctCut, f: (n) => pct(n, 0), df: (n) => `${Math.round(n * 100)} pts`, neutral: true },
-            { k: 'Holding', a: a?.moves.pctHold, b: b?.moves.pctHold, f: (n) => pct(n, 0), df: (n) => `${Math.round(n * 100)} pts`, neutral: true },
-            { k: 'Raising', a: a?.moves.pctRaise, b: b?.moves.pctRaise, f: (n) => pct(n, 0), df: (n) => `${Math.round(n * 100)} pts`, neutral: true },
-          ]}
-        />
+      <Section
+        n="01"
+        title={`Where everyone landed · Round ${d.quadrantRound}`}
+        aside={
+          <label className="toggle">
+            <input type="checkbox" checked={showAiDots} onChange={(e) => setShowAiDots(e.target.checked)} /> Show AI
+          </label>
+        }
+      >
+        <QuadrantScatter points={d.quadrant} showAi={showAiDots} />
       </Section>
 
-      <Section n="02" title="Market outcome">
-        <CompareTable
-          hasR2={hasR2}
-          rows={[
-            { k: 'Total market demand (customers)', a: a?.totalDemand, b: b?.totalDemand, f: int, neutral: true },
-            { k: 'Total market revenue (QAR)', a: a?.totalRevenue, b: b?.totalRevenue, f: int },
-            { k: 'Total market profit (QAR)', a: a?.totalProfit, b: b?.totalProfit, f: int },
-          ]}
-        />
+      <Section n="02" title="What the room learned" aside={<span className="eyebrow">{st.humans} participants</span>}>
+        <div className="stats">
+          <Tile k="R1 at dossier right price" v={orDot(st.pctAtRightR1, (x) => pct(x, 0))} s={`within ±50: ${orDot(st.pctNearRightR1, (x) => pct(x, 0))}`} />
+          <Tile k="Named primary competitor" v={orDot(st.pctGuessCorrect, (x) => pct(x, 0))} s={`${st.guesses} of ${st.humans} answered`} />
+          <Tile
+            k="Median profit captured"
+            v={
+              <>
+                {orDot(st.medianCapturedR1, (x) => pct(x, 0))} → {orDot(st.medianCapturedR2, (x) => pct(x, 0))}
+              </>
+            }
+            s="of the best response to actual rivals, R1 → R2"
+          />
+          <Tile
+            k="Avg participant price"
+            v={
+              <>
+                {orDot(L.avgPriceR1, int)} → {orDot(L.avgPriceR2, int)}
+              </>
+            }
+            s={L.pctChanged !== null ? `${pct(L.pctChanged, 0)} changed · ▲ ${pct(L.pctUp ?? 0, 0)} ▼ ${pct(L.pctDown ?? 0, 0)}` : 'R1 → R2'}
+          />
+          <Tile
+            k="Avg participant profit"
+            v={
+              <>
+                {orDot(L.avgProfitR1, kqar)} → {orDot(L.avgProfitR2, kqar)}
+              </>
+            }
+            s={L.avgProfitR1 !== null && L.avgProfitR2 !== null ? <Delta value={L.avgProfitR2 - L.avgProfitR1} format={(n) => `QAR ${int(n)}`} /> : 'R1 → R2'}
+          />
+        </div>
       </Section>
 
-      <Section n="03" title="Counterfactuals: what if everyone moved together?" aside={<span className="eyebrow">Same companies, same economics</span>}>
+      <Section n="03" title="Counterfactuals: what if everyone moved together?" aside={<span className="eyebrow">Summed across all markets</span>}>
         <div className="stack">
-          {hold && cut && actual && (
+          {right && hold && smb && (
             <p className="callout">
-              If every company had simply <b>held at QAR 1,000</b>, the market would have earned{' '}
-              <b>{qar(Math.abs(hold.totalProfit - actual.totalProfit))}</b> {hold.totalProfit >= actual.totalProfit ? 'more' : 'less'} than it
-              actually did. If everyone had cut to QAR 900, total profit would fall to <b>{qar(cut.totalProfit)}</b>.
+              Everyone at their <b>dossier right price</b> earns {qar(right.totalProfit)}, {qar(Math.abs(right.totalProfit - hold.totalProfit))}{' '}
+              {right.totalProfit >= hold.totalProfit ? 'more' : 'less'} than everyone holding at 1,000. If the SMB cluster then undercuts each
+              other by 100, the room gives back {qar(Math.abs(right.totalProfit - smb.totalProfit))}: a price war among look-alikes.
             </p>
           )}
           <CounterfactualBars items={d.counterfactuals} />
+          <div className="scroll-x">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Scenario</th>
+                  <th className="r">Avg price</th>
+                  <th className="r">Customers</th>
+                  <th className="r">Revenue</th>
+                  <th className="r">Profit</th>
+                  <th className="r">Avg profit / company</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.counterfactuals.map((c) => (
+                  <tr key={c.key} className={c.key.startsWith('actual') ? 'hl' : ''}>
+                    <td className={c.key.startsWith('actual') ? 'strong' : ''}>{c.label}</td>
+                    <td className="r">{int(c.avgPrice)}</td>
+                    <td className="r">{int(c.totalUnits)}</td>
+                    <td className="r">{int(c.totalRevenue)}</td>
+                    <td className="r strong">{int(c.totalProfit)}</td>
+                    <td className="r">{int(c.avgProfit)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </Section>
+
+      <Section n="04" title="Price moves" aside={<span className="eyebrow">All companies · humans + AI</span>}>
+        <div className="stack">
+          <PriceDistribution r1={a?.priceHistogram} r2={b?.priceHistogram} />
           <table className="data">
             <thead>
               <tr>
-                <th>Scenario</th>
-                <th className="r">Avg price</th>
-                <th className="r">Total demand</th>
-                <th className="r">Total revenue</th>
-                <th className="r">Total profit</th>
-                <th className="r">Avg profit / company</th>
+                <th>vs QAR 1,000</th>
+                <th className="r">Round 1</th>
+                {hasR2 && <th className="r">Round 2</th>}
               </tr>
             </thead>
             <tbody>
-              {d.counterfactuals.map((c) => (
-                <tr key={c.key} className={c.key.startsWith('actual') ? 'hl' : ''}>
-                  <td className={c.key.startsWith('actual') ? 'strong' : ''}>{c.label}</td>
-                  <td className="r">{int(c.avgPrice)}</td>
-                  <td className="r">{int(c.totalDemand)}</td>
-                  <td className="r">{int(c.totalRevenue)}</td>
-                  <td className="r strong">{int(c.totalProfit)}</td>
-                  <td className="r">{int(c.avgProfit)}</td>
+              <tr>
+                <td>Average price</td>
+                <td className="r">{a ? int(a.avgPrice) : '·'}</td>
+                {hasR2 && <td className="r strong">{int(b!.avgPrice)}</td>}
+              </tr>
+              {(['cut', 'hold', 'raise'] as const).map((k) => (
+                <tr key={k}>
+                  <td>{k === 'hold' ? 'Held' : k === 'cut' ? 'Cut' : 'Raised'}</td>
+                  <td className="r">{a?.moves[k] ?? '·'}</td>
+                  {hasR2 && <td className="r strong">{b?.moves[k]}</td>}
                 </tr>
               ))}
             </tbody>
@@ -169,100 +272,39 @@ export function Debrief({ view }: { view: HostView }) {
         </div>
       </Section>
 
-      <div className="h-grid">
-        <Section n="04" title="Strategic behavior">
-          <div className="stack">
-            <PriceDistribution r1={a?.priceHistogram} r2={b?.priceHistogram} />
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>Move</th>
-                  <th className="r">Round 1</th>
-                  {hasR2 && <th className="r">Round 2</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {(['cut', 'hold', 'raise'] as const).map((k) => (
-                  <tr key={k}>
-                    <td style={{ textTransform: 'capitalize' }}>{k === 'hold' ? 'Held' : k === 'cut' ? 'Cut' : 'Raised'}</td>
-                    <td className="r">{a?.moves[k] ?? '·'}</td>
-                    {hasR2 && <td className="r strong">{b?.moves[k]}</td>}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Section>
-
-        <Section n="05" title="Learning effect" aside={<span className="eyebrow">{L.humans} participants</span>}>
-          <div className="stats" style={{ gridTemplateColumns: '1fr 1fr' }}>
-            <div className="card stat">
-              <span className="k">Avg profit R1 → R2</span>
-              <span className="v" style={{ fontSize: 28 }}>
-                {L.avgProfitR1 !== null ? int(L.avgProfitR1) : '·'} → {L.avgProfitR2 !== null ? int(L.avgProfitR2) : '·'}
-              </span>
-              {L.avgProfitR1 !== null && L.avgProfitR2 !== null && <Delta value={L.avgProfitR2 - L.avgProfitR1} format={(n) => `QAR ${int(n)}`} />}
-            </div>
-            <div className="card stat">
-              <span className="k">Avg price R1 → R2</span>
-              <span className="v" style={{ fontSize: 28 }}>
-                {L.avgPriceR1 !== null ? int(L.avgPriceR1) : '·'} → {L.avgPriceR2 !== null ? int(L.avgPriceR2) : '·'}
-              </span>
-              <span className="s">QAR / month, participants only</span>
-            </div>
-            <div className="card stat">
-              <span className="k">Changed price</span>
-              <span className="v">{L.pctChanged !== null ? pct(L.pctChanged, 0) : '·'}</span>
-            </div>
-            <div className="card stat">
-              <span className="k">Moved up · down</span>
-              <span className="v" style={{ fontSize: 30 }}>
-                {L.pctUp !== null ? `▲ ${pct(L.pctUp, 0)}` : '·'}{'  '}
-                {L.pctDown !== null ? `▼ ${pct(L.pctDown, 0)}` : ''}
-              </span>
-            </div>
-          </div>
-        </Section>
-      </div>
-
-      <Section
-        n="06"
-        title="Leaderboard"
-        aside={
-          <label className="toggle">
-            <input type="checkbox" checked={showNames} onChange={(e) => setShowNames(e.target.checked)} /> Show names
-          </label>
-        }
-      >
+      <Section n="05" title="Markets" aside={<span className="eyebrow">Each market clears on its own</span>}>
+        <div className="scroll-x">
         <table className="data">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Competitor</th>
-              <th>Archetype</th>
-              <th className="r">R1 price</th>
+              <th>Market</th>
+              <th className="r">Participants</th>
+              <th className="r">R1 avg price</th>
               <th className="r">R1 profit</th>
-              {hasR2 && <th className="r">R2 price</th>}
+              {hasR2 && <th className="r">R2 avg price</th>}
               {hasR2 && <th className="r">R2 profit</th>}
             </tr>
           </thead>
           <tbody>
-            {lb.slice(0, 15).map((r, i) => (
-              <tr key={r.id}>
-                <td className="faint">{i + 1}</td>
+            {d.markets.map((m) => (
+              <tr key={m.index}>
                 <td>
-                  {r.kind === 'ai' ? r.label : showNames ? r.label : r.label.split(' · ')[0]}{' '}
-                  {r.kind === 'ai' && <span className="tag ai">AI</span>}
+                  <span className="mkt">Market {m.index + 1}</span>
                 </td>
-                <td className="muted">{r.archetype}</td>
-                <td className="r">{r.r1Price ?? '·'}</td>
-                <td className="r">{r.r1Profit !== null ? int(r.r1Profit) : '·'}</td>
-                {hasR2 && <td className="r">{r.r2Price ?? '·'}</td>}
-                {hasR2 && <td className="r strong">{r.r2Profit !== null ? int(r.r2Profit) : '·'}</td>}
+                <td className="r">{m.humans}</td>
+                <td className="r">{m.r1 ? int(m.r1.avgPrice) : '·'}</td>
+                <td className="r">{m.r1 ? int(m.r1.totalProfit) : '·'}</td>
+                {hasR2 && <td className="r">{m.r2 ? int(m.r2.avgPrice) : '·'}</td>}
+                {hasR2 && <td className="r strong">{m.r2 ? int(m.r2.totalProfit) : '·'}</td>}
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
+      </Section>
+
+      <Section n="06" title="Leaderboard" aside={<span className="eyebrow">Profit first, share change beside it</span>}>
+        <Leaderboard rows={d.leaderboard} hasR2={hasR2} />
       </Section>
     </div>
   );

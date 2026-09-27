@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { PRICE_OPTIONS, type Price, type TimerState } from '../../../shared/types';
-import { MOVE, clock, int, useCountdown } from '../lib';
+import { clock, int, moveLabel, useCountdown } from '../lib';
 
 export function Briefcase({ size = 28 }: { size?: number }) {
   return (
@@ -54,61 +54,71 @@ export function TimerBar({ timer, serverNow, label }: { timer: TimerState | null
   );
 }
 
+/** 4×4 grid of the 16 prices, then an explicit lock step. */
 export function PricePicker({
   onLock,
   busy,
   previous,
+  lockedReason,
 }: {
   onLock: (p: Price) => void;
   busy: boolean;
   previous?: Price;
+  /** When set, the grid is disabled and this explains why. */
+  lockedReason?: string;
 }) {
   const [sel, setSel] = useState<Price | null>(null);
+  const disabled = busy || !!lockedReason;
   return (
     <div className="stack">
-      <div className="prices" role="group" aria-label="Choose your price">
+      <div className={`price-grid${lockedReason ? ' is-locked' : ''}`} role="group" aria-label="Choose your price, QAR per customer per month">
         {PRICE_OPTIONS.map((p) => {
-          const m = MOVE[p];
+          const d = p - 1000;
           return (
             <button
               key={p}
               type="button"
-              className={`price-btn ${m.kind}`}
+              className={`pcell ${d < 0 ? 'cut' : d > 0 ? 'raise' : 'hold'}`}
               aria-pressed={sel === p}
+              aria-label={`QAR ${int(p)}${previous === p ? ', your Round 1 price' : ''}`}
               onClick={() => setSel(p)}
-              disabled={busy}
+              disabled={disabled}
             >
-              <span className="glyph" aria-hidden="true">
-                {m.glyph}
-              </span>
-              <span>
-                <span className="amt">
-                  <small>QAR</small>
-                  {int(p)}
-                </span>
-                <span className="move" style={{ display: 'block' }}>
-                  {m.label}
-                  {previous === p ? ' · your Round 1 price' : ''}
-                </span>
-              </span>
-              <span className="check" aria-hidden="true">
-                {sel === p ? '✓' : ''}
-              </span>
+              {previous === p && <span className="prev">R1</span>}
+              <span className="cur">QAR</span>
+              <span className="amt">{int(p)}</span>
+              <span className="mv">{moveLabel(p)}</span>
             </button>
           );
         })}
       </div>
-      <button className="btn primary lg block" disabled={sel === null || busy} onClick={() => sel && onLock(sel)}>
-        {busy ? 'Locking…' : sel ? `Lock in QAR ${int(sel)}` : 'Select a price'}
-      </button>
+      {lockedReason ? (
+        <p className="banner" role="status">
+          {lockedReason}
+        </p>
+      ) : (
+        <button className="btn primary lg block" disabled={sel === null || busy} onClick={() => sel && onLock(sel)}>
+          {busy ? 'Locking…' : sel ? `Lock in QAR ${int(sel)}` : 'Select a price'}
+        </button>
+      )}
       <p className="faint" style={{ fontSize: 13.5, textAlign: 'center' }}>
-        Decisions are final and simultaneous. Everyone else is choosing right now.
+        Decisions are final and simultaneous. Every other CEO in your market is choosing right now.
       </p>
     </div>
   );
 }
 
-export function Delta({ value, format = int, invert = false, neutral = false }: { value: number; format?: (n: number) => string; invert?: boolean; neutral?: boolean }) {
+export function Delta({
+  value,
+  format = int,
+  invert = false,
+  neutral = false,
+}: {
+  value: number;
+  format?: (n: number) => string;
+  invert?: boolean;
+  neutral?: boolean;
+}) {
   const eps = 1e-9;
   const good = invert ? value < -eps : value > eps;
   const bad = invert ? value > eps : value < -eps;
@@ -119,6 +129,19 @@ export function Delta({ value, format = int, invert = false, neutral = false }: 
     <span className={`delta ${cls}`}>
       <span aria-hidden="true">{arrow} </span>
       {txt}
+    </span>
+  );
+}
+
+/** Horizontal similarity meter + percentage (never colour alone). */
+export function Similarity({ value }: { value: number }) {
+  const pct = Math.round(value * 100);
+  return (
+    <span className="simm" title={`${pct}% similar to you`}>
+      <span className="simbar" aria-hidden="true">
+        <i style={{ width: `${Math.max(2, pct)}%` }} />
+      </span>
+      <span className="simv">{pct}%</span>
     </span>
   );
 }

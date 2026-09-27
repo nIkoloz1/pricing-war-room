@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { io, type Socket } from 'socket.io-client';
-import type { Ack, Price, TimerState } from '../../shared/types';
+import type { Ack, TimerState } from '../../shared/types';
 
 // ---------------------------------------------------------------------------
 //  Socket (one per tab; reconnects automatically)
@@ -116,18 +116,14 @@ export const kqar = (n: number) => {
   return `${n < 0 ? '−' : ''}${s}`;
 };
 
-export const MOVE: Record<Price, { label: string; glyph: string; kind: 'cut' | 'hold' | 'raise' }> = {
-  800: { label: 'Cut 20%', glyph: '−20', kind: 'cut' },
-  900: { label: 'Cut 10%', glyph: '−10', kind: 'cut' },
-  1000: { label: 'Hold', glyph: '=', kind: 'hold' },
-  1100: { label: 'Raise 10%', glyph: '+10', kind: 'raise' },
-  1200: { label: 'Raise 20%', glyph: '+20', kind: 'raise' },
-};
-
-export function sensitivityWord(e: number): string {
-  if (e >= 2.2) return 'Very high';
-  if (e >= 1.9) return 'High';
-  if (e >= 1.6) return 'Medium-high';
-  if (e >= 1.25) return 'Medium';
-  return 'Low';
+/** Price move vs the QAR 1,000 going rate: "+50", "−150", "hold". */
+export function moveLabel(price: number): string {
+  const d = price - 1000;
+  return d === 0 ? 'hold' : d > 0 ? `+${d}` : `−${Math.abs(d)}`;
 }
+
+/** Percentage points with sign: "+1.8 pts". */
+export const pts = (x: number, digits = 1) => {
+  const v = Math.abs(x) < 0.05 ? 0 : x;
+  return `${v > 0 ? '+' : v < 0 ? '−' : '±'}${Math.abs(v).toFixed(digits)} pts`;
+};

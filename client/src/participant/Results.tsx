@@ -1,186 +1,205 @@
-import type { MyRoundResult, PlayerView, PublicMarketInfo } from '../../../shared/types';
-import { Delta } from '../ui/common';
-import { MOVE, int, money, pct, qar } from '../lib';
+import type { CompetitorRow, FlowRow, MyRoundResult, PlayerView } from '../../../shared/types';
+import { Delta, Similarity } from '../ui/common';
+import { int, moveLabel, money, pct, pts, qar } from '../lib';
 
-export function ResultKpis({ r }: { r: MyRoundResult }) {
+export function CompetitorBoard({ rows, highlightId, title = 'Your market' }: { rows: CompetitorRow[]; highlightId?: string; title?: string }) {
   return (
-    <section className="kpis" aria-label={`Round ${r.round} headline results`}>
-      <div className="kpi share">
-        <span className="label">Your market share</span>
-        <span className="value num">{pct(r.marketShare)}</span>
-        <span className="sub">
-          Rank {r.shareRank} of {r.totalCompetitors} competitors
-        </span>
+    <section className="card pad stack-sm" aria-label={title}>
+      <div className="row between">
+        <span className="eyebrow brass">{title}</span>
+        <span className="eyebrow">By similarity</span>
       </div>
-      <div className="kpi revenue">
-        <span className="label">Your revenue</span>
-        <span className="value num">
-          <span className="cur">QAR</span>
-          {money(r.revenue)}
-        </span>
-        <span className="sub">
-          {int(r.units)} customers × QAR {int(r.price)}
-        </span>
-      </div>
-      <div className="kpi profit">
-        <span className="label">Your profit</span>
-        <span className={`value num${r.profit < 0 ? ' neg' : ''}`}>
-          <span className="cur">QAR</span>
-          {money(r.profit)}
-        </span>
-        <span className="sub">
-          Rank {r.profitRank} of {r.totalCompetitors} · monthly operating profit
-        </span>
-      </div>
+      <table className="board">
+        <thead>
+          <tr>
+            <th scope="col">Competitor</th>
+            <th scope="col" className="r">
+              Similar
+            </th>
+            <th scope="col" className="r">
+              Price
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.id} className={r.id === highlightId ? 'pc' : undefined}>
+              <td>
+                <span className="co">{r.company}</span>
+                <span className="seg">{r.segment}</span>
+              </td>
+              <td className="r">
+                <Similarity value={r.similarity} />
+              </td>
+              <td className="r">
+                <b>{int(r.price)}</b>
+                <span className="mvtag">{moveLabel(r.price)}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   );
 }
 
-export function ResultDetails({ r }: { r: MyRoundResult }) {
+export function FlowList({ flows, highlightId }: { flows: FlowRow[]; highlightId?: string }) {
+  const max = Math.max(1, ...flows.map((f) => Math.abs(f.customers)));
+  const moved = flows.filter((f) => f.customers !== 0 || f.id === highlightId);
+  const still = flows.filter((f) => f.customers === 0 && f.id !== highlightId);
   return (
-    <div className="card pad stack">
-      <div className="details">
-        <div className="d">
-          <span>Your price</span>
+    <div className="flows" role="list">
+      {moved.map((f) => {
+        const kind = f.customers > 0 ? 'won' : f.customers < 0 ? 'lost' : 'even';
+        const n = Math.abs(f.customers);
+        return (
+          <div key={f.id} role="listitem" className={`flow ${kind}${f.id === highlightId ? ' pc' : ''}`}>
+            <span>
+              {kind === 'won' ? (
+                <>
+                  Won <b>{n}</b> customer{n === 1 ? '' : 's'} from <b>{f.company}</b>
+                </>
+              ) : kind === 'lost' ? (
+                <>
+                  Lost <b>{n}</b> customer{n === 1 ? '' : 's'} to <b>{f.company}</b>
+                </>
+              ) : (
+                <>
+                  No customers moved with <b>{f.company}</b>
+                </>
+              )}
+            </span>
+            <span className="fv">
+              {kind === 'won' ? '+' : kind === 'lost' ? '−' : ''}
+              {n} · {Math.round(f.similarity * 100)}% similar
+            </span>
+            <span className="fbar" aria-hidden="true">
+              <i style={{ width: `${(n / max) * 50}%` }} />
+            </span>
+          </div>
+        );
+      })}
+      {still.length > 0 && (
+        <div role="listitem" className="flow even">
           <span>
-            QAR {int(r.price)} · {MOVE[r.price].label}
-            {r.defaulted ? ' (no decision, held)' : ''}
+            No customers moved with <b>{still.map((f) => f.company).join(', ')}</b>
           </span>
         </div>
-        <div className="d">
-          <span>Customers acquired</span>
-          <span>{int(r.units)}</span>
-        </div>
-        <div className="d">
-          <span>Market average price</span>
-          <span>QAR {int(r.avgPrice)}</span>
-        </div>
-        <div className="d">
-          <span>Total market demand</span>
-          <span>{int(r.totalDemand)} customers</span>
-        </div>
-        <div className="d">
-          <span>Profit rank</span>
-          <span>
-            {r.profitRank} of {r.totalCompetitors}
-          </span>
-        </div>
-        <div className="d">
-          <span>Market share rank</span>
-          <span>
-            {r.shareRank} of {r.totalCompetitors}
-          </span>
-        </div>
-      </div>
-      <details className="fold" style={{ background: 'var(--ink-0)' }}>
-        <summary>
-          <span className="eyebrow">How your profit adds up</span>
-        </summary>
-        <div className="body pnl">
-          <div className="l">
-            <span>Revenue ({int(r.units)} × {int(r.price)})</span>
-            <span>{money(r.revenue)}</span>
-          </div>
-          <div className="l">
-            <span>− Variable costs</span>
-            <span>{money(-r.variableCostTotal)}</span>
-          </div>
-          <div className="l">
-            <span>− Fixed costs</span>
-            <span>{money(-r.fixedCost)}</span>
-          </div>
-          <div className="l total">
-            <span>= Profit</span>
-            <span>{qar(r.profit)}</span>
-          </div>
-        </div>
-      </details>
+      )}
     </div>
   );
 }
 
-export function MarketIntel({ m, title }: { m: PublicMarketInfo; title: string }) {
+function Headline({ r }: { r: MyRoundResult }) {
+  const profitable = r.profit >= 0;
   return (
-    <section className="card pad moves" aria-label={title}>
-      <div className="row between">
-        <span className="eyebrow teal">{title}</span>
-        <span className="eyebrow">Public</span>
+    <section className="kpis" aria-label={`Round ${r.round} headline results`}>
+      <div className="kpi profit">
+        <span className="label">
+          Your profit{' '}
+          <span className={`badge ${profitable ? 'good' : 'bad'}`}>{profitable ? '✓ Profitable' : '✕ Loss'}</span>
+        </span>
+        <span className={`value num${profitable ? '' : ' neg'}`}>
+          <span className="cur">QAR</span>
+          {money(r.profit)}
+        </span>
+        <span className="sub">
+          Rank {r.profitRank} of {r.marketSize} in your market · {qar(r.statusQuoProfit)} if everyone had held at 1,000
+        </span>
       </div>
-      <div className="minigrid">
-        <div>
-          <span className="k">Average price</span>
-          <span className="v">QAR {int(m.avgPrice)}</span>
-        </div>
-        <div>
-          <span className="k">Market demand</span>
-          <span className="v">{int(m.totalDemand)}</span>
-        </div>
+      <div className="kpi share">
+        <span className="label">Market share change</span>
+        <span className="value num">{pts(r.shareChangePp)}</span>
+        <span className="sub">
+          Start {pct(r.startShare)} → now {pct(r.share)} of your market
+        </span>
       </div>
-      <div className="movebar" role="img" aria-label={`${pct(m.pctCut, 0)} cut, ${pct(m.pctHold, 0)} held, ${pct(m.pctRaise, 0)} raised`}>
-        {m.pctCut > 0 && <i className="c" style={{ width: `${m.pctCut * 100}%` }} />}
-        {m.pctHold > 0 && <i className="h" style={{ width: `${m.pctHold * 100}%` }} />}
-        {m.pctRaise > 0 && <i className="r" style={{ width: `${m.pctRaise * 100}%` }} />}
-      </div>
-      <div className="movelegend">
-        <div>
-          <span className="k">
-            <i style={{ background: '#c4604f' }} /> Cut
-          </span>
-          <span className="v">{pct(m.pctCut, 0)}</span>
-        </div>
-        <div>
-          <span className="k">
-            <i style={{ background: '#7d8089' }} /> Held
-          </span>
-          <span className="v">{pct(m.pctHold, 0)}</span>
-        </div>
-        <div>
-          <span className="k">
-            <i style={{ background: 'var(--teal)' }} /> Raised
-          </span>
-          <span className="v">{pct(m.pctRaise, 0)}</span>
-        </div>
+      <div className="kpi revenue">
+        <span className="label">Customers</span>
+        <span className="value num">{int(r.units)}</span>
+        <span className="sub">
+          Started with {int(r.startCustomers)} · revenue {qar(r.revenue)}
+        </span>
       </div>
     </section>
   );
 }
 
-export function RoundOneRecap({ r }: { r: MyRoundResult }) {
+function Verdict({ r }: { r: MyRoundResult }) {
+  const best = r.bestGivenCompetitors;
+  const captured = best.profit > 0 ? Math.max(0, r.profit / best.profit) : null;
   return (
-    <section className="card pad stack" aria-label="Your Round 1">
-      <span className="eyebrow brass">Your Round 1</span>
-      <div className="minigrid">
+    <section className="card pad verdict" aria-label="How good was your price">
+      <div className="vrow">
+        <span>
+          Your price
+          <small>{r.defaulted ? 'No decision received, so your price stayed put' : moveLabel(r.price) === 'hold' ? 'Held at the going rate' : `${moveLabel(r.price)} vs the going rate`}</small>
+        </span>
+        <b>QAR {int(r.price)}</b>
+      </div>
+      <div className="vrow">
+        <span>
+          Your dossier right price
+          <small>If every competitor had stayed at QAR 1,000</small>
+        </span>
+        <b>QAR {int(r.dossierRightPrice)}</b>
+      </div>
+      <div className="vrow">
+        <span>
+          Best price given what competitors actually did
+          <small>Profit there: {qar(best.profit)}</small>
+        </span>
+        <b>QAR {int(best.price)}</b>
+      </div>
+      {captured !== null && (
         <div>
-          <span className="k">Price</span>
-          <span className="v">QAR {int(r.price)}</span>
+          <div className="row between" style={{ fontSize: 13.5 }}>
+            <span className="muted">You captured</span>
+            <b>{pct(Math.min(captured, 1), 0)} of the best possible profit</b>
+          </div>
+          <div className="meter" aria-hidden="true">
+            <i style={{ width: `${Math.min(1, captured) * 100}%` }} />
+          </div>
         </div>
-        <div>
-          <span className="k">Market share</span>
-          <span className="v">{pct(r.marketShare)}</span>
+      )}
+    </section>
+  );
+}
+
+function PnL({ r }: { r: MyRoundResult }) {
+  return (
+    <details className="fold">
+      <summary>
+        <span className="eyebrow">How your profit adds up</span>
+      </summary>
+      <div className="body pnl">
+        <div className="l">
+          <span>
+            Revenue ({int(r.units)} × {int(r.price)})
+          </span>
+          <span>{money(r.revenue)}</span>
         </div>
-        <div>
-          <span className="k">Revenue · QAR</span>
-          <span className="v">{money(r.revenue)}</span>
+        <div className="l">
+          <span>− Variable costs</span>
+          <span>{money(-r.variableCostTotal)}</span>
         </div>
-        <div>
-          <span className="k">Profit · QAR</span>
-          <span className={`v${r.profit < 0 ? ' neg' : ''}`}>{money(r.profit)}</span>
+        <div className="l">
+          <span>− Fixed costs</span>
+          <span>{money(-r.fixedCost)}</span>
+        </div>
+        <div className="l total">
+          <span>= Profit</span>
+          <span>{qar(r.profit)}</span>
         </div>
       </div>
-    </section>
+    </details>
   );
 }
 
 export function ChangeTable({ a, b }: { a: MyRoundResult; b: MyRoundResult }) {
-  const rows: { k: string; a: string; b: string; d: number; f: (n: number) => string }[] = [
-    { k: 'Market share', a: pct(a.marketShare), b: pct(b.marketShare), d: (b.marketShare - a.marketShare) * 100, f: (n) => `${n.toFixed(1)} pts` },
-    { k: 'Revenue', a: money(a.revenue), b: money(b.revenue), d: b.revenue - a.revenue, f: int },
-    { k: 'Profit', a: money(a.profit), b: money(b.profit), d: b.profit - a.profit, f: int },
-    { k: 'Price', a: int(a.price), b: int(b.price), d: b.price - a.price, f: int },
-  ];
   return (
     <section className="card pad stack" aria-label="Your change from Round 1 to Round 2">
-      <span className="eyebrow brass">Your change</span>
+      <span className="eyebrow brass">Round 1 → Round 2</span>
       <table className="change-table">
         <thead>
           <tr>
@@ -191,17 +210,68 @@ export function ChangeTable({ a, b }: { a: MyRoundResult; b: MyRoundResult }) {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
-            <tr key={r.k}>
-              <td>{r.k}</td>
-              <td>{r.a}</td>
-              <td style={{ fontWeight: 600 }}>{r.b}</td>
-              <td>{r.k === 'Price' ? <span className="delta flat">{r.d === 0 ? 'same' : `${r.d > 0 ? '+' : '−'}${int(Math.abs(r.d))}`}</span> : <Delta value={r.d} format={r.f} />}</td>
-            </tr>
-          ))}
+          <tr>
+            <td>Profit</td>
+            <td>{money(a.profit)}</td>
+            <td style={{ fontWeight: 600 }}>{money(b.profit)}</td>
+            <td>
+              <Delta value={b.profit - a.profit} />
+            </td>
+          </tr>
+          <tr>
+            <td>Customers</td>
+            <td>{int(a.units)}</td>
+            <td style={{ fontWeight: 600 }}>{int(b.units)}</td>
+            <td>
+              <Delta value={b.units - a.units} />
+            </td>
+          </tr>
+          <tr>
+            <td>Share vs start</td>
+            <td>{pts(a.shareChangePp)}</td>
+            <td style={{ fontWeight: 600 }}>{pts(b.shareChangePp)}</td>
+            <td>
+              <Delta value={b.shareChangePp - a.shareChangePp} format={(n) => `${n.toFixed(1)} pts`} />
+            </td>
+          </tr>
+          <tr>
+            <td>Price</td>
+            <td>{int(a.price)}</td>
+            <td style={{ fontWeight: 600 }}>{int(b.price)}</td>
+            <td>
+              <span className="delta flat">{b.price === a.price ? 'same' : `${b.price > a.price ? '+' : '−'}${int(Math.abs(b.price - a.price))}`}</span>
+            </td>
+          </tr>
         </tbody>
       </table>
-      <p className="faint" style={{ fontSize: 13 }}>Revenue and profit in QAR per month.</p>
+      <p className="faint" style={{ fontSize: 13 }}>
+        Profit in QAR per month.
+      </p>
+    </section>
+  );
+}
+
+function PrimaryRivalCard({ r }: { r: MyRoundResult }) {
+  const pc = r.competitors.find((c) => c.id === r.primaryCompetitorId);
+  const flow = r.flows?.find((f) => f.id === r.primaryCompetitorId);
+  if (!pc || !flow) return null;
+  return (
+    <section className="card pad stack-sm" aria-label="Your primary competitor this round">
+      <span className="eyebrow brass">Your primary competitor this round</span>
+      <div className="row between">
+        <span>
+          <b style={{ fontSize: 18 }}>{pc.company}</b>
+          <span className="faint" style={{ display: 'block', fontSize: 13 }}>
+            {pc.segment} · {Math.round(pc.similarity * 100)}% similar
+          </span>
+        </span>
+        <span style={{ textAlign: 'right' }}>
+          <b style={{ fontFamily: 'var(--f-display)', fontSize: 22 }}>QAR {int(pc.price)}</b>
+          <span className="faint" style={{ display: 'block', fontSize: 13 }}>
+            {flow.customers > 0 ? `you won ${flow.customers} from them` : flow.customers < 0 ? `they won ${-flow.customers} from you` : 'no customers moved'}
+          </span>
+        </span>
+      </div>
     </section>
   );
 }
@@ -220,33 +290,38 @@ export function ResultsScreen({ view, round }: { view: PlayerView; round: 1 | 2 
         </span>
       </header>
 
-      <ResultKpis r={r} />
-
+      <Headline r={r} />
       {round === 2 && r1 && <ChangeTable a={r1} b={r} />}
+      <Verdict r={r} />
+      <PnL r={r} />
 
-      <ResultDetails r={r} />
+      {round === 2 && <PrimaryRivalCard r={r} />}
+      {round === 2 && r.flows && (
+        <section className="card pad stack-sm" aria-label="Where your customers came from and went">
+          <span className="eyebrow brass">Customer flows this round</span>
+          <FlowList flows={r.flows} highlightId={r.primaryCompetitorId} />
+        </section>
+      )}
 
-      {round === 1 && (
-        <div className="saved" role="status">
-          <span aria-hidden="true" style={{ fontSize: 20 }}>
-            ✓
-          </span>
-          <span>
-            <b>Round 1 complete.</b> Your result is saved.
-            {phase === 'workshop' ? ' The workshop is in progress. Round 2 opens when the host is ready.' : ' Waiting for the host.'}
-          </span>
-        </div>
-      )}
-      {round === 2 && (
-        <div className="saved" role="status">
-          <span aria-hidden="true" style={{ fontSize: 20 }}>
-            ✓
-          </span>
-          <span>
-            <b>Game complete.</b> {phase === 'debrief' ? 'Look up at the main screen for the market debrief.' : 'The debrief is about to begin.'}
-          </span>
-        </div>
-      )}
+      <CompetitorBoard rows={r.competitors} highlightId={round === 2 ? r.primaryCompetitorId : undefined} title={`Round ${round} prices`} />
+
+      <div className="saved" role="status">
+        <span aria-hidden="true" style={{ fontSize: 20 }}>
+          ✓
+        </span>
+        <span>
+          {round === 1 ? (
+            <>
+              <b>Round 1 complete.</b> Your result is saved.{' '}
+              {phase === 'workshop' ? 'The workshop is in progress. Round 2 opens when the host is ready.' : 'Waiting for the host.'}
+            </>
+          ) : (
+            <>
+              <b>Game complete.</b> {phase === 'debrief' ? 'Look up at the main screen for the debrief.' : 'The debrief is about to begin.'}
+            </>
+          )}
+        </span>
+      </div>
     </div>
   );
 }

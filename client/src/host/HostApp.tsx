@@ -1,7 +1,7 @@
 import QRCode from 'qrcode';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { PHASE_LABEL, type HostAction, type HostView, type Phase } from '../../../shared/types';
-import { call, clock, getSocket, store, useConnection, useCountdown } from '../lib';
+import { call, clock, getSocket, int, store, useConnection, useCountdown } from '../lib';
 import { Brandmark, ConnectionPill } from '../ui/common';
 import { Debrief, RoundSummary } from './Debrief';
 
@@ -152,7 +152,7 @@ function StatsRow({ view }: { view: HostView }) {
         <span className="k">Total competitors</span>
         <span className="v num">{c.totalCompetitors}</span>
         <span className="s">
-          {c.humans} human + {c.aiCompetitors} AI
+          {c.markets} market{c.markets === 1 ? '' : 's'} of 10 · {c.humans} human + {c.aiCompetitors} AI
         </span>
       </div>
       <div className="card stat">
@@ -284,11 +284,11 @@ function Settings({ view, act }: { view: HostView; act: (a: HostAction) => void 
     <div className="row wrap" style={{ gap: 22, color: 'var(--text-2)', fontSize: 14 }}>
       <label className="row" style={{ gap: 8 }}>
         Round 1 timer
-        <input className="num-input" type="number" min={15} max={900} value={r1} onChange={(e) => setR1(Number(e.target.value))} onBlur={() => act({ type: 'setDuration', round: 1, seconds: r1 })} />s
+        <input className="num-input" type="number" min={15} max={1200} value={r1} onChange={(e) => setR1(Number(e.target.value))} onBlur={() => act({ type: 'setDuration', round: 1, seconds: r1 })} />s
       </label>
       <label className="row" style={{ gap: 8 }}>
         Round 2 timer
-        <input className="num-input" type="number" min={15} max={900} value={r2} onChange={(e) => setR2(Number(e.target.value))} onBlur={() => act({ type: 'setDuration', round: 2, seconds: r2 })} />s
+        <input className="num-input" type="number" min={15} max={1200} value={r2} onChange={(e) => setR2(Number(e.target.value))} onBlur={() => act({ type: 'setDuration', round: 2, seconds: r2 })} />s
       </label>
       <label className="toggle">
         <input type="checkbox" checked={view.session.autoReveal} onChange={(e) => act({ type: 'setAutoReveal', value: e.target.checked })} />
@@ -383,10 +383,15 @@ function Participants({ view, act, round }: { view: HostView; act: (a: HostActio
                 <span className="who">
                   <b>{p.name}</b>
                   <span>
-                    {p.codename} · {p.company}
+                    {p.marketIndex !== null && <span className="mkt">M{p.marketIndex + 1}</span>} {p.company} ({p.letter}) · {p.codename}
                   </span>
                 </span>
                 <span className="row" style={{ gap: 6 }}>
+                  {round === 2 && (
+                    <span className="subm" title={p.guess ? `Named ${p.guess.company}` : 'Has not answered the quiz yet'}>
+                      {p.guess ? (p.guess.correct ? <span className="ok">Q ✓</span> : <span className="no">Q ✗</span>) : 'Q …'}
+                    </span>
+                  )}
                   {round && <span className={`subm${submitted ? ' yes' : ''}`}>{submitted ? '✓ in' : '…'}</span>}
                   {p.isDemo && p.token && (
                     <a className="subm" href={`/?as=${encodeURIComponent(p.token)}`} target="_blank" rel="noreferrer" title="Preview this demo participant's screen">
@@ -424,12 +429,70 @@ function RoundLive({ view }: { view: HostView }) {
       <div className="progress" style={{ width: '100%', maxWidth: 640 }}>
         <i style={{ width: `${c.expectedSubmissions ? (c.submissions / c.expectedSubmissions) * 100 : 0}%` }} />
       </div>
+      {round === 2 && (
+        <p className="eyebrow">
+          {c.guesses} of {c.expectedSubmissions} have named their primary competitor
+        </p>
+      )}
       <p className="muted">
         {round === 1
           ? 'Missing decisions default to QAR 1,000 when the timer ends.'
-          : 'Participants see their Round 1 result, the Round 1 market and the strategy sheet.'}
+          : 'Each participant names their Round 1 primary competitor, sees the real customer flows and a best-response table, then locks a price. Missing decisions keep their Round 1 price.'}
       </p>
     </section>
+  );
+}
+
+function AiTable({ view }: { view: HostView }) {
+  if (!view.ai.length) return null;
+  return (
+    <details className="fold">
+      <summary>
+        <span>
+          <span className="eyebrow">AI competitors</span>
+          <br />
+          <span style={{ fontWeight: 600 }}>
+            {view.ai.length} AI compan{view.ai.length === 1 ? 'y' : 'ies'} filling empty archetypes
+          </span>
+        </span>
+      </summary>
+      <div className="body scroll-x">
+        <table className="data">
+          <thead>
+            <tr>
+              <th>Market</th>
+              <th>Company</th>
+              <th>Archetype</th>
+              <th>Personality</th>
+              <th className="r">VC</th>
+              <th className="r">FC</th>
+              <th className="r">Right price</th>
+              <th className="r">R1</th>
+              <th className="r">R2</th>
+            </tr>
+          </thead>
+          <tbody>
+            {view.ai.map((a) => (
+              <tr key={a.id}>
+                <td>
+                  <span className="mkt">M{a.marketIndex + 1}</span>
+                </td>
+                <td>{a.name}</td>
+                <td className="muted">
+                  {a.letter} · {a.archetype}
+                </td>
+                <td className="muted">{a.personality}</td>
+                <td className="r">{int(a.vc)}</td>
+                <td className="r">{int(a.fc)}</td>
+                <td className="r">{int(a.rightPrice)}</td>
+                <td className="r">{a.decisions[1] ?? '·'}</td>
+                <td className="r">{a.decisions[2] ?? '·'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }
 
@@ -449,6 +512,7 @@ function PhaseBody({ view, act }: { view: HostView; act: (a: HostAction) => void
         <div className="stack-lg">
           <RoundLive view={view} />
           <Participants view={view} act={act} round={phase === 'r1_decision' ? 1 : 2} />
+          <AiTable view={view} />
         </div>
       );
     case 'r1_clearing':
@@ -477,6 +541,7 @@ function PhaseBody({ view, act }: { view: HostView; act: (a: HostAction) => void
             </p>
           )}
           <RoundSummary view={view} round={1} />
+          <AiTable view={view} />
         </div>
       );
     case 'r2_results':

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import type { PlayerView, Price } from '../../../shared/types';
-import { MOVE, call, getSocket, int, store, useConnection } from '../lib';
+import { call, getSocket, int, moveLabel, pct, store, useConnection } from '../lib';
 import { Brandmark, ConnectionPill, PricePicker, TimerBar } from '../ui/common';
-import { Briefcase, Dossier, DossierChips, MarketBrief } from './Dossier';
-import { MarketIntel, ResultsScreen, RoundOneRecap } from './Results';
-import { StrategySheet } from './StrategySheet';
+import { Briefcase, DossierFold, MarketBrief } from './Dossier';
+import { ResultsScreen } from './Results';
+import { Round2DeskScreen } from './Round2Desk';
 
 const TOKEN_KEY = 'pwr.token';
 const params = new URLSearchParams(window.location.search);
@@ -168,6 +168,15 @@ function PhaseScreen({ view, token, onView }: { view: PlayerView; token: string;
     else setError(res.error ?? 'Could not submit. Try again.');
   };
 
+  const guess = async (competitorId: string) => {
+    setBusy(true);
+    setError(null);
+    const res = await call<{ view: PlayerView }>('player:guess', { token, competitorId });
+    setBusy(false);
+    if (res.ok && res.data) onView(res.data.view);
+    else setError(res.error ?? 'Could not send your answer. Try again.');
+  };
+
   const errorBanner = error && (
     <div className="banner error" role="alert">
       {error}
@@ -192,7 +201,7 @@ function PhaseScreen({ view, token, onView }: { view: PlayerView; token: string;
       return view.me.decisions[2] ? (
         <Locked view={view} round={2} />
       ) : (
-        <DecideRound2 view={view} busy={busy} onLock={lock} error={errorBanner} />
+        <Round2DeskScreen view={view} busy={busy} onLock={lock} onGuess={guess} error={errorBanner} />
       );
     case 'r2_clearing':
       return <Locked view={view} round={2} clearing />;
@@ -224,6 +233,7 @@ function Lobby({ view }: { view: PlayerView }) {
 }
 
 function DecideRound1({ view, busy, onLock, error }: { view: PlayerView; busy: boolean; onLock: (p: Price) => void; error: React.ReactNode }) {
+  const start = view.me.start;
   return (
     <div className="stack-lg">
       <TimerBar timer={view.session.timer} serverNow={view.serverNow} label="Round 1" />
@@ -232,65 +242,23 @@ function DecideRound1({ view, busy, onLock, error }: { view: PlayerView; busy: b
         <h1 className="display" style={{ fontSize: 44 }}>
           Set your price.
         </h1>
-        <p className="muted">Maximize your monthly operating profit. You do not know what the other CEOs will choose.</p>
+        <p className="muted">Use your dossier: the value route or the CLV route. You do not know what the other CEOs will choose.</p>
       </header>
-      <details className="fold">
-        <summary>
-          <span className="stack-sm">
-            <span className="eyebrow">Your dossier</span>
-            <DossierChips profile={view.me.profile} />
-          </span>
-        </summary>
-        <div className="body" style={{ padding: 0 }}>
-          <Dossier profile={view.me.profile} codename={view.me.codename} />
-        </div>
-      </details>
+      {start && (
+        <section className="startcard" aria-label="Your starting position">
+          <div>
+            <span className="k">Starting customers</span>
+            <span className="v">{int(start.customers)}</span>
+          </div>
+          <div>
+            <span className="k">Starting share</span>
+            <span className="v">{pct(start.share)}</span>
+          </div>
+        </section>
+      )}
+      <DossierFold profile={view.me.profile} codename={view.me.codename} />
       {error}
       <PricePicker onLock={onLock} busy={busy} />
-    </div>
-  );
-}
-
-function DecideRound2({ view, busy, onLock, error }: { view: PlayerView; busy: boolean; onLock: (p: Price) => void; error: React.ReactNode }) {
-  const [sheet, setSheet] = useState(false);
-  const r1 = view.me.results[1];
-  const m1 = view.market[1];
-  return (
-    <div className="stack-lg">
-      <TimerBar timer={view.session.timer} serverNow={view.serverNow} label="Round 2" />
-      <header className="stack-sm">
-        <span className="eyebrow brass">Round 2 · {view.me.profile.company}</span>
-        <h1 className="display" style={{ fontSize: 40 }}>
-          Same company.
-          <br />
-          <em style={{ color: 'var(--brass)', fontWeight: 400 }}>New information.</em>
-        </h1>
-      </header>
-      {r1 && <RoundOneRecap r={r1} />}
-      {m1 && <MarketIntel m={m1} title="Round 1 market" />}
-      <button className="btn lg block" onClick={() => setSheet(true)} style={{ borderColor: 'var(--brass-deep)' }}>
-        <span aria-hidden="true">▤</span> Open the strategy sheet
-      </button>
-      <details className="fold">
-        <summary>
-          <span className="stack-sm">
-            <span className="eyebrow">Your dossier</span>
-            <DossierChips profile={view.me.profile} />
-          </span>
-        </summary>
-        <div className="body" style={{ padding: 0 }}>
-          <Dossier profile={view.me.profile} codename={view.me.codename} />
-        </div>
-      </details>
-      <div className="stack-sm">
-        <span className="eyebrow brass">Round 2 decision</span>
-        <h2 className="display" style={{ fontSize: 32 }}>
-          Set your price.
-        </h2>
-      </div>
-      {error}
-      <PricePicker onLock={onLock} busy={busy} previous={r1?.price} />
-      {sheet && <StrategySheet profile={view.me.profile} onClose={() => setSheet(false)} />}
     </div>
   );
 }
@@ -310,12 +278,12 @@ function Locked({ view, round, clearing = false }: { view: PlayerView; round: 1 
               <span style={{ fontSize: 20, fontFamily: 'var(--f-mono)', color: 'var(--text-3)', marginRight: 8, verticalAlign: '0.9em' }}>QAR</span>
               {int(price)}
             </span>
-            <span className="pill">{MOVE[price].label}</span>
+            <span className="pill">{moveLabel(price) === 'hold' ? 'Hold' : `${moveLabel(price)} vs 1,000`}</span>
           </>
         ) : (
           <>
             <span className="lockstamp">TIME</span>
-            <p className="muted">No decision received. Your price stays at QAR 1,000.</p>
+            <p className="muted">No decision received. {round === 1 ? 'Your price stays at QAR 1,000.' : 'Your price stays at your Round 1 price.'}</p>
           </>
         )}
         <div className="radar" aria-hidden="true" style={{ marginTop: 10 }} />

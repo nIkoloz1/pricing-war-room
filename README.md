@@ -2,7 +2,7 @@
 
 > *One market. Your price changes everyone's outcome.*
 
-A live multiplayer pricing simulation for the QSTP **Pricing & Packaging for Startups** workshop. Up to 50 people join from their phones. Each person is the CEO of their own B2B startup, and everyone competes in **one shared market**. There are two scored rounds, one before the workshop and one after it. After each round, every participant sees their own **market share, revenue and profit**.
+A live multiplayer pricing simulation for the QSTP **Pricing & Packaging for Startups** workshop. Up to 50 people join from their phones. Each person is the CEO of one of ten B2B companies, each with its own customers, costs and demand curve. Players compete in **parallel markets of ten**: one company of each type per market, with AI filling any gaps. There are two scored rounds. Round 1 tests value-based and CLV pricing from the dossier. Round 2 tests game theory: who is my real competitor, and how should I respond? Players are scored on **profit** and on **market share change** from where they started.
 
 - **Participants:** `https://your-domain/` (mobile-first; they join by QR code)
 - **Host dashboard:** `https://your-domain/host` (desktop, password protected with `HOST_KEY`)
@@ -28,8 +28,8 @@ Other commands:
 | `npm run dev` | API server (port 3001, auto-reload) plus the Vite client (port 5173) |
 | `npm run build` | Type-checks, then builds the client to `dist/client` and the server to `dist/server.js` |
 | `npm start` | Runs the production build on `PORT` (default 3001), serving both the game and the API |
-| `npm test` | 42 automated tests: market math, game-theory calibration, 1/2/5/10/20/50 players, sockets, reconnects, CSV |
-| `npm run calibrate` | Prints each dossier's profit at every price, for rehearsal or re-tuning |
+| `npm test` | Automated tests: the engine's calibrated numbers, market assignment, the Round 2 quiz gating, 1 to 50 players, sockets, reconnects, persistence, CSV |
+| `npm run calibrate` | Prints derived coefficients, best responses, the similarity matrix and whole-market scenarios, for rehearsal or re-tuning |
 
 ## Environment
 
@@ -44,14 +44,23 @@ Copy `.env.example`. The server reads real environment variables; your hosting p
 ## Running a session
 
 1. Open `/host` and enter the host key. The dashboard updates live, so you never need to refresh it.
-2. **Registration.** Put the QR code on screen with *Show QR full screen*. It links to `/?code=XXXX`. The 4-character **session code** is also shown for anyone typing the address by hand. Each person enters their name and immediately receives a codename and a sealed **confidential dossier** (one of 10 company profiles, dealt evenly and at random).
-3. **Lock registration** when the room is in. *Start Round 1* also locks it. If fewer than 10 people joined, AI competitors fill the market up to 10 companies.
-4. **Round 1.** The timer defaults to 120 s. Participants pick QAR 800 / 900 / 1,000 / 1,100 / 1,200 and lock it in. The round clears when everyone has submitted or the timer ends. Anyone who didn't submit stays at QAR 1,000. You can **Pause**, add **+30 s**, or **End round now**.
-5. **Results.** With the default setting, each phone shows its private result as soon as the market clears. If you untick *Show results … as soon as the market clears*, a **Reveal** button appears so you can reveal on cue.
+2. **Registration.** Put the QR code on screen with *Show QR full screen*. It links to `/?code=XXXX`. The 4-character **session code** is also shown for anyone typing the address by hand. Each person enters their name and immediately receives a codename and a sealed **confidential dossier**. Each block of ten joiners gets one of each of the 10 companies, in random order.
+3. **Lock registration** when the room is in. *Start Round 1* also locks it and builds the markets. Market *m* gets the *m*-th player of each company type, so the number of markets is the largest number of players holding the same dossier. With 1 to 10 players that is usually one market. AI companies with identical economics fill every empty seat, so each market always has exactly ten companies, one of each type.
+4. **Round 1** (default 240 s). Participants price from their dossier alone, choosing from a 4×4 grid of QAR 700 to 1,450 in steps of 50. The dossier teaches two routes to the same right price: economic value (max willingness to pay and variable cost) and CLV (customers × lifetime value per row of the demand table). The round clears when everyone has submitted or the timer ends. Anyone who didn't submit stays at QAR 1,000. You can **Pause**, add **+30 s**, or **End round now**.
+5. **Results.** Each phone shows profit (Profitable / Loss), share change in points vs the starting share, customers, the dossier right price, the best price given what competitors actually did, and every competitor in the market with its price and **similarity**. With the default setting, results appear as soon as the market clears. If you untick *Show results … as soon as the market clears*, a **Reveal** button appears so you can reveal on cue.
 6. **Start workshop phase.** Teach the material. Phones keep the Round 1 result on screen.
-7. **Start Round 2.** The timer defaults to 180 s. Each participant sees their Round 1 numbers, the Round 1 market (average price, % who cut, held or raised) and a **Strategy Sheet** filled in with their own margin, break-even, value-multiple and CLV figures. AI competitors react to what happened in Round 1.
-8. **Show debrief** (host screen): room behavior, market outcome, **counterfactuals** (what if everyone held, cut or raised), strategic behavior, learning effect and a leaderboard. Names are hidden unless you tick *Show names*.
-9. **Export:** *Players CSV* has one row per participant with every required column. *Market CSV* has the aggregates, counterfactuals and every competitor.
+7. **Start Round 2** (default 300 s). Each participant works through a three-step desk:
+   1. **Quiz:** "Who was your primary competitor for market share in Round 1?" There are four options, the most similar rivals, always including the right answer. Only after answering do they see the true customer flows ("won 7 from X, lost 12 to Y").
+   2. **Best response:** a table of their best price against the likely moves of that competitor, holding everyone else at Round 1 prices, plus how strongly that rival's price moves theirs.
+   3. **Price:** the grid unlocks once the quiz is answered. Anyone who doesn't submit keeps their Round 1 price. AI competitors react to Round 1 according to their personalities.
+8. **Show debrief** (host screen). It has six parts:
+   - the **profit vs share-change quadrant** (value-led growth, harvesting, buying share, value problem);
+   - what the room learned: % at the dossier right price in Round 1, % who named their primary competitor, and median profit captured in Round 1 vs Round 2;
+   - **counterfactuals** summed across markets: everyone holds, everyone at their right price, and right prices with the SMB cluster cutting 100;
+   - price moves;
+   - a per-market table;
+   - a sortable leaderboard (profit first, share change beside it). Names are hidden unless you tick *Show names*.
+9. **Export:** *Players CSV* has one row per participant. It includes market, right price, share change, best price given competitors, profit captured, primary competitor, the quiz answer and whether it was correct. *Market CSV* has per-market and room aggregates, counterfactuals and every competitor.
 
 **Resetting.** *New session / reset* wipes everything and creates a new session code. Connected phones return to the join screen.
 
@@ -59,32 +68,32 @@ Copy `.env.example`. The server reads real environment variables; your hosting p
 
 ## Demo mode (rehearsal)
 
-In registration, click **+10 / +20 / +50 simulated**. Simulated participants have real companies. They submit on their own during each round and choose according to their profile: price-sensitive companies lean low, premium ones lean high, and in Round 2 about half play a best response to Round 1. Each simulated participant has a **view** link in the participant list, so you can see exactly what their phone shows. You can also join from your own phone at the same time.
+In registration, click **+10 / +20 / +50 simulated**. Simulated participants have real companies and play on their own.
+- **Round 1:** 45% pick their right price, 20% hold at 1,000, and the rest miss by 100 to 200.
+- **Round 2:** they answer the quiz first, correctly 60% of the time. Then half play a best response, a quarter keep their price, and a quarter drift toward their rival. Each simulated participant has a **view** link in the participant list, so you can see exactly what their phone shows. You can also join from your own phone at the same time.
 
 ## Changing the simulation
 
 | What | File |
 |---|---|
-| Market coefficients, timers, player caps, counterfactual scenarios | **`server/src/sim/params.ts`** |
-| The 10 participant dossiers (economics and wording) | `server/src/sim/profiles.ts` |
-| The 10 AI competitors and their Round 1 / Round 2 behaviour | `server/src/sim/ai.ts` |
-| The market-clearing math | `server/src/sim/market.ts` |
+| Similarity (KAPPA), switching strength (LAMBDA), price grid, timers, player cap | **`server/src/sim/params.ts`** |
+| The 10 companies: costs, right price, starting customers, churn, map position, EVE lines, AI name and personality | `server/src/sim/companies.ts` |
+| AI personalities and demo bots | `server/src/sim/ai.ts` |
+| The demand and switching engine | `server/src/sim/market.ts` |
 
-After a change, run `npm test` (the calibration tests check conditions A to H from the spec) and `npm run calibrate`.
+After a change, run `npm test` (the engine tests pin every calibrated number) and `npm run calibrate`.
 
-### The model (server-side only; participants never see it)
+### How the market works (plain language)
 
-```
-base_demand   = 100 × competitors
-avg_price     = mean of all prices (humans + AI)
-demand_factor = clamp(1 + 0.25 × (1000 − avg_price) / 1000, 0.85, 1.10)
-total_demand  = base_demand × demand_factor
-attractiveness_i = (value_i / 1000) × (price_i / 1000) ^ (−elasticity_i)
-share_i       = attractiveness_i / Σ attractiveness
-customers_i   = total_demand × share_i       (rounded to whole customers; totals still add up)
-revenue_i     = customers_i × price_i
-profit_i      = revenue_i − customers_i × variable_cost_i − fixed_cost_i
-```
+Each company has its **own demand curve**. Its best-fit customers would pay at most its *max willingness to pay*, which the dossier builds as the going rate plus differentiation minus value lost. Below that, customers' willingness to pay is spread evenly, so every QAR you raise loses a steady number of customers. Each company's numbers are set so that, **if everyone else stays at 1,000**, its most profitable price is its dossier **right price**, which sits halfway between its max willingness to pay and its variable cost. The CLV route lands on the same price.
+
+Some of the customers you lose by raising your price simply stop buying. The rest **switch to similar competitors**. Every company sits on a map of the market, and similarity falls off with distance: `similarity = exp(-3 x distance)`. Switching between two companies is proportional to their similarity and to the **price gap** between them, and it is symmetric, so customers are conserved. In practice:
+
+- Near-twins like the three SMB self-serve tools (SwiftOps, ScaleAI, LaunchAI) steal customers from each other with every price move. Undercutting each other is a prisoner's dilemma: all three end up worse off.
+- Differentiated companies such as MedFlow (healthcare) barely feel anyone else's price. Their best price hardly moves.
+- A company's **primary competitor** in a round is the rival it traded the most customers with, which comes from similarity × price gap, not from similarity alone.
+
+Whole customers are paid out (revenue = customers × price; profit = customers × (price − variable cost) − fixed cost). Everyone at 1,000 reproduces each company's starting customers exactly, so the share change is measured against that starting point.
 
 ## Deployment (productbeans.com)
 
