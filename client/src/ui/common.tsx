@@ -1,26 +1,17 @@
 import { useState } from 'react';
 import { PRICE_OPTIONS, type Price, type TimerState } from '../../../shared/types';
 import { clock, int, moveLabel, useCountdown } from '../lib';
-
-export function Briefcase({ size = 28 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 64 64" aria-hidden="true">
-      <rect x="10" y="20" width="44" height="32" rx="5" fill="none" stroke="var(--brass)" strokeWidth="4" />
-      <path d="M24 20v-5a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v5" fill="none" stroke="var(--brass)" strokeWidth="4" />
-      <path d="M10 33h44" stroke="var(--brass)" strokeWidth="4" />
-      <rect x="28" y="29" width="8" height="8" rx="1.5" fill="var(--brass)" />
-    </svg>
-  );
-}
+import { Icon } from './icons';
 
 export function Brandmark({ sub = 'QSTP · Pricing Workshop' }: { sub?: string }) {
   return (
     <div className="brandmark">
-      <Briefcase />
+      <span className="mark">
+        <Icon name="briefcase" />
+      </span>
       <div className="t">
         The Pricing War Room
-        <br />
-        <span style={{ color: 'var(--text-3)' }}>{sub}</span>
+        <span>{sub}</span>
       </div>
     </div>
   );
@@ -123,11 +114,10 @@ export function Delta({
   const good = invert ? value < -eps : value > eps;
   const bad = invert ? value > eps : value < -eps;
   const cls = neutral ? 'flat' : good ? 'up' : bad ? 'down' : 'flat';
-  const arrow = value > eps ? '▲' : value < -eps ? '▼' : '■';
   const txt = value > eps ? `+${format(value)}` : value < -eps ? `−${format(Math.abs(value))}` : format(0);
   return (
     <span className={`delta ${cls}`}>
-      <span aria-hidden="true">{arrow} </span>
+      <Icon name={value > eps ? 'arrowUp' : value < -eps ? 'arrowDown' : 'minus'} size="sm" />
       {txt}
     </span>
   );

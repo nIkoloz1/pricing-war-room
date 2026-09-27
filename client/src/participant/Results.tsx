@@ -1,5 +1,6 @@
 import type { CompetitorRow, FlowRow, MyRoundResult, PlayerView } from '../../../shared/types';
 import { Delta, Similarity } from '../ui/common';
+import { Icon } from '../ui/icons';
 import { int, moveLabel, money, pct, pts, qar } from '../lib';
 
 export function CompetitorBoard({ rows, highlightId, title = 'Your market' }: { rows: CompetitorRow[]; highlightId?: string; title?: string }) {
@@ -97,7 +98,7 @@ function Headline({ r }: { r: MyRoundResult }) {
       <div className="kpi profit">
         <span className="label">
           Your profit{' '}
-          <span className={`badge ${profitable ? 'good' : 'bad'}`}>{profitable ? '✓ Profitable' : '✕ Loss'}</span>
+          <span className={`badge ${profitable ? 'good' : 'bad'}`}><Icon name={profitable ? 'check' : 'x'} size="sm" /> {profitable ? 'Profitable' : 'Loss'}</span>
         </span>
         <span className={`value num${profitable ? '' : ' neg'}`}>
           <span className="cur">QAR</span>
@@ -306,8 +307,8 @@ export function ResultsScreen({ view, round }: { view: PlayerView; round: 1 | 2 
       <CompetitorBoard rows={r.competitors} highlightId={round === 2 ? r.primaryCompetitorId : undefined} title={`Round ${round} prices`} />
 
       <div className="saved" role="status">
-        <span aria-hidden="true" style={{ fontSize: 20 }}>
-          ✓
+        <span className="ok-dot" aria-hidden="true">
+          <Icon name="check" size="sm" />
         </span>
         <span>
           {round === 1 ? (

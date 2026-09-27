@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { CompanyProfile } from '../../../shared/types';
 import { int, pct, store } from '../lib';
+import { Icon } from '../ui/icons';
 
 export function Dossier({ profile: p, codename }: { profile: CompanyProfile; codename: string }) {
   const dropPer50 = Math.round(50 * p.customersPerQar);
@@ -163,18 +164,16 @@ export function Briefcase({ profile, codename, playerId }: { profile: CompanyPro
           setOpen(true);
         }}
       >
-        <span className="eyebrow" style={{ color: '#d9b77e' }}>
+        <span className="eyebrow" style={{ color: 'var(--on-dark-2)' }}>
           Eyes only · {codename}
         </span>
         <span className="seal" aria-hidden="true">
           {profile.letter}
         </span>
         <span className="display">Your company dossier</span>
-        <span style={{ color: '#d9c3a0', fontSize: 15 }}>
-          The information inside is yours alone. Do not show it to other participants.
-        </span>
-        <span className="btn primary" style={{ marginTop: 6 }}>
-          Break the seal
+        <span className="sub">The information inside is yours alone. Do not show it to other participants.</span>
+        <span className="btn primary" style={{ marginTop: 8 }}>
+          <Icon name="unlock" /> Open my dossier
         </span>
       </button>
     );
@@ -227,7 +226,7 @@ export function MarketBrief() {
     <details className="fold">
       <summary>
         <span>
-          <span className="eyebrow brass">Participant brief</span>
+          <span className="eyebrow">Participant brief</span>
           <br />
           <span style={{ fontWeight: 600 }}>The market you are entering</span>
         </span>

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import type { PlayerView, Price, Round2Desk as Desk } from '../../../shared/types';
 import { int, money, moveLabel, pts } from '../lib';
 import { PricePicker, Similarity, TimerBar } from '../ui/common';
+import { Icon } from '../ui/icons';
 import { DossierFold } from './Dossier';
 import { CompetitorBoard, FlowList } from './Results';
 
@@ -9,7 +10,7 @@ function Step({ n, state, title, children }: { n: number; state: 'now' | 'done' 
   return (
     <section className="card pad stack" aria-label={title}>
       <div className="step-head">
-        <span className={`step-no${state === 'done' ? ' done' : state === 'wait' ? ' wait' : ''}`}>{state === 'done' ? '✓' : n}</span>
+        <span className={`step-no${state === 'done' ? ' done' : state === 'wait' ? ' wait' : ''}`}>{state === 'done' ? <Icon name="check" size="sm" /> : n}</span>
         <h2 className="display" style={{ fontSize: 22 }}>
           {title}
         </h2>
@@ -43,7 +44,7 @@ function Quiz({ desk, busy, onGuess }: { desk: Desk; busy: boolean; onGuess: (id
             >
               <span className="co">{o.company}</span>
               <span className="tick">
-                {answered && o.id === truth ? '✓ Primary' : answered && o.id === desk.guess ? '✕ Your pick' : ''}
+                {answered && o.id === truth ? <><Icon name="check" size="sm" /> Primary</> : answered && o.id === desk.guess ? <><Icon name="x" size="sm" /> Your pick</> : ''}
               </span>
               <span className="meta">
                 <span>{o.segment}</span>
@@ -147,7 +148,7 @@ export function Round2DeskScreen({
         <h1 className="display" style={{ fontSize: 40 }}>
           Same company.
           <br />
-          <em style={{ color: 'var(--brass)', fontWeight: 400 }}>New information.</em>
+          <em style={{ color: 'var(--violet)', fontStyle: 'normal' }}>New information.</em>
         </h1>
       </header>
 

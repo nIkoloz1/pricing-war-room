@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { HostView, LeaderRow, RoundNo } from '../../../shared/types';
 import { int, kqar, pct, pts, qar } from '../lib';
 import { Delta } from '../ui/common';
+import { Icon } from '../ui/icons';
 import { CounterfactualBars, PriceDistribution, QuadrantScatter } from './charts';
 
 function Section({ n, title, children, aside }: { n: string; title: string; children: React.ReactNode; aside?: React.ReactNode }) {
@@ -131,7 +132,7 @@ function Leaderboard({ rows, hasR2 }: { rows: LeaderRow[]; hasR2: boolean }) {
                 {hasR2 && <td className={`r${sort === 'r2SharePp' ? ' strong' : ''}`}>{r.r2SharePp !== null ? pts(r.r2SharePp) : '·'}</td>}
                 {hasR2 && (
                   <td className="r">
-                    {r.guessCorrect === null ? <span className="faint">·</span> : r.guessCorrect ? <span className="ok">✓</span> : <span className="no">✗</span>}
+                    {r.guessCorrect === null ? <span className="faint">·</span> : r.guessCorrect ? <span className="ok"><Icon name="check" size="sm" label="correct" /></span> : <span className="no"><Icon name="x" size="sm" label="wrong" /></span>}
                   </td>
                 )}
               </tr>
@@ -190,7 +191,7 @@ export function Debrief({ view }: { view: HostView }) {
                 {orDot(L.avgPriceR1, int)} → {orDot(L.avgPriceR2, int)}
               </>
             }
-            s={L.pctChanged !== null ? `${pct(L.pctChanged, 0)} changed · ▲ ${pct(L.pctUp ?? 0, 0)} ▼ ${pct(L.pctDown ?? 0, 0)}` : 'R1 → R2'}
+            s={L.pctChanged !== null ? `${pct(L.pctChanged, 0)} changed · ${pct(L.pctUp ?? 0, 0)} up · ${pct(L.pctDown ?? 0, 0)} down` : 'R1 → R2'}
           />
           <Tile
             k="Avg participant profit"

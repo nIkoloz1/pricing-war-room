@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import type { PlayerView, Price } from '../../../shared/types';
 import { call, getSocket, int, moveLabel, pct, store, useConnection } from '../lib';
 import { Brandmark, ConnectionPill, PricePicker, TimerBar } from '../ui/common';
+import { Icon } from '../ui/icons';
 import { Briefcase, DossierFold, MarketBrief } from './Dossier';
 import { ResultsScreen } from './Results';
 import { Round2DeskScreen } from './Round2Desk';
@@ -102,7 +103,7 @@ function JoinScreen({ onJoined, notice }: { onJoined: (t: string, v: PlayerView)
   return (
     <div className="stack-lg">
       <section className="hero">
-        <span className="eyebrow brass">Live pricing simulation</span>
+        <span className="eyebrow">Live pricing simulation</span>
         <h1 className="display">
           The Pricing <em>War Room</em>
         </h1>
@@ -141,13 +142,16 @@ function JoinScreen({ onJoined, notice }: { onJoined: (t: string, v: PlayerView)
         </button>
       </form>
 
-      <div className="case-rule">
-        <span className="eyebrow">You will receive</span>
-      </div>
-      <div className="stack-sm" style={{ color: 'var(--text-2)', fontSize: 15 }}>
-        <p>① A confidential company dossier that only you can see.</p>
-        <p>② One pricing decision per round, made at the same time as every other CEO.</p>
-        <p>③ Your own market share, revenue and profit after each round.</p>
+      <div className="steps3" aria-label="How it works">
+        <div>
+          <b>1</b>A confidential company dossier that only you can see.
+        </div>
+        <div>
+          <b>2</b>One price per round, set at the same time as every other CEO.
+        </div>
+        <div>
+          <b>3</b>Your profit and market-share change after each round.
+        </div>
       </div>
     </div>
   );
@@ -273,20 +277,22 @@ function Locked({ view, round, clearing = false }: { view: PlayerView; round: 1 
         <span className="eyebrow">Round {round} · {view.me.profile.company}</span>
         {price ? (
           <>
-            <span className="lockstamp">DECISION LOCKED</span>
+            <span className="lockstamp">
+              <Icon name="lock" size="sm" /> Decision locked
+            </span>
             <span className="big num">
-              <span style={{ fontSize: 20, fontFamily: 'var(--f-mono)', color: 'var(--text-3)', marginRight: 8, verticalAlign: '0.9em' }}>QAR</span>
+              <small>QAR</small>
               {int(price)}
             </span>
             <span className="pill">{moveLabel(price) === 'hold' ? 'Hold' : `${moveLabel(price)} vs 1,000`}</span>
           </>
         ) : (
           <>
-            <span className="lockstamp">TIME</span>
+            <span className="lockstamp">Time is up</span>
             <p className="muted">No decision received. {round === 1 ? 'Your price stays at QAR 1,000.' : 'Your price stays at your Round 1 price.'}</p>
           </>
         )}
-        <div className="radar" aria-hidden="true" style={{ marginTop: 10 }} />
+        <div className="radar" aria-hidden="true" style={{ marginTop: 8 }} />
         <p className="muted" role="status">
           {clearing || !decisionPhase ? 'The market is clearing. Results arrive shortly.' : 'Waiting for the market to clear. The other CEOs are still deciding.'}
         </p>

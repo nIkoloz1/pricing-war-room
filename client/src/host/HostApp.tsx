@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { PHASE_LABEL, type HostAction, type HostView, type Phase } from '../../../shared/types';
 import { call, clock, getSocket, int, store, useConnection, useCountdown } from '../lib';
 import { Brandmark, ConnectionPill } from '../ui/common';
+import { Icon } from '../ui/icons';
 import { Debrief, RoundSummary } from './Debrief';
 
 const KEY = 'pwr.hostKey';
@@ -68,7 +69,7 @@ export function HostApp() {
         <Stepper phase={view.session.phase} />
         <div className="row">
           <span className="pill">
-            Code <b style={{ color: 'var(--brass)', letterSpacing: '0.2em' }}>{view.session.code}</b>
+            Code <b style={{ color: 'var(--ink)', letterSpacing: '0.16em' }}>{view.session.code}</b>
           </span>
           <ConnectionPill connected={connected} />
         </div>
@@ -128,7 +129,7 @@ function Stepper({ phase }: { phase: Phase }) {
     <nav className="stepper" aria-label="Game phase">
       {STEPS.map((s, i) => (
         <span key={s.label} className={`step${i === idx ? ' active' : i < idx ? ' done' : ''}`} aria-current={i === idx ? 'step' : undefined}>
-          <span className="n">{i < idx ? '✓' : i + 1}</span>
+          <span className="n">{i < idx ? <Icon name="check" size="sm" /> : i + 1}</span>
           {s.label}
         </span>
       ))}
@@ -165,7 +166,7 @@ function StatsRow({ view }: { view: HostView }) {
       <div className="card stat">
         <span className="k">Submissions</span>
         <span className="v num">
-          {inRound ? c.submissions : '·'} <small>/ {c.expectedSubmissions}</small>
+          {inRound ? c.submissions : '–'} <small>/ {c.expectedSubmissions}</small>
         </span>
         <div className="progress" aria-hidden="true">
           <i style={{ width: `${inRound && c.expectedSubmissions ? (c.submissions / c.expectedSubmissions) * 100 : 0}%` }} />
@@ -224,11 +225,11 @@ function Controls({ view, act, hostKey }: { view: HostView; act: (a: HostAction)
             <>
               {timer.paused ? (
                 <button className="btn lg teal" onClick={() => act({ type: 'resume' })}>
-                  ▶ Resume
+                  <Icon name="play" /> Resume
                 </button>
               ) : (
                 <button className="btn lg" onClick={() => act({ type: 'pause' })}>
-                  ❚❚ Pause
+                  <Icon name="pause" /> Pause
                 </button>
               )}
               <button className="btn lg" onClick={() => act({ type: 'addTime', seconds: 30 })}>
@@ -239,7 +240,7 @@ function Controls({ view, act, hostKey }: { view: HostView; act: (a: HostAction)
           {phase === 'registration' &&
             (registrationOpen ? (
               <button className="btn lg" onClick={() => act({ type: 'lockRegistration' })}>
-                🔒 Lock registration
+                <Icon name="lock" /> Lock registration
               </button>
             ) : (
               <button className="btn lg" onClick={() => act({ type: 'openRegistration' })}>
@@ -249,10 +250,10 @@ function Controls({ view, act, hostKey }: { view: HostView; act: (a: HostAction)
         </div>
         <div className="row">
           <a className="btn sm" href={`/api/export/players.csv?key=${encodeURIComponent(hostKey)}`} aria-disabled={!view.rounds[1]}>
-            ⇩ Players CSV
+            <Icon name="download" size="sm" /> Players CSV
           </a>
           <a className="btn sm" href={`/api/export/market.csv?key=${encodeURIComponent(hostKey)}`}>
-            ⇩ Market CSV
+            <Icon name="download" size="sm" /> Market CSV
           </a>
           {confirmReset ? (
             <>
@@ -309,7 +310,7 @@ function Settings({ view, act }: { view: HostView; act: (a: HostAction) => void 
 function useQr(url: string) {
   const [svg, setSvg] = useState('');
   useEffect(() => {
-    QRCode.toString(url, { type: 'svg', margin: 0, errorCorrectionLevel: 'M', color: { dark: '#0f1113', light: '#ffffff' } }).then(setSvg);
+    QRCode.toString(url, { type: 'svg', margin: 0, errorCorrectionLevel: 'M', color: { dark: '#14172b', light: '#ffffff' } }).then(setSvg);
   }, [url]);
   return svg;
 }
@@ -322,7 +323,7 @@ function JoinPanel({ view }: { view: HostView }) {
     <section className="card qr-panel">
       <button className="qr-box" onClick={() => setFull(true)} aria-label="Show QR code full screen" style={{ border: 0, cursor: 'zoom-in' }} dangerouslySetInnerHTML={{ __html: svg }} />
       <div className="stack">
-        <span className="eyebrow brass">Join from your phone</span>
+        <span className="eyebrow">Join from your phone</span>
         <span className="join-url">{location.host}</span>
         <div className="stack-sm">
           <span className="eyebrow">Session code</span>
@@ -333,19 +334,21 @@ function JoinPanel({ view }: { view: HostView }) {
         </p>
         <div>
           <button className="btn" onClick={() => setFull(true)}>
-            ⛶ Show QR full screen
+            <Icon name="expand" /> Show QR full screen
           </button>
         </div>
       </div>
       {full && (
         <div className="overlay" onClick={() => setFull(false)} role="dialog" aria-label="Join QR code">
           <div className="stack" style={{ justifyItems: 'center', textAlign: 'center' }}>
-            <h1 className="display" style={{ fontSize: 56 }}>
-              The Pricing <em style={{ color: 'var(--brass)', fontWeight: 400 }}>War Room</em>
-            </h1>
+            <div className="hero" style={{ padding: 0 }}>
+              <h1 className="display" style={{ fontSize: 56 }}>
+                The Pricing <em>War Room</em>
+              </h1>
+            </div>
             <div className="qr-box" dangerouslySetInnerHTML={{ __html: svg }} />
             <span className="join-url" style={{ fontSize: 28 }}>
-              {location.host} · code <b style={{ color: 'var(--brass)', letterSpacing: '0.2em' }}>{view.session.code}</b>
+              {location.host} · code <b style={{ letterSpacing: '0.16em' }}>{view.session.code}</b>
             </span>
             <span className="pill live">
               <span className="dot" /> {view.counts.humans} CEOs in the room · click anywhere to close
@@ -389,10 +392,10 @@ function Participants({ view, act, round }: { view: HostView; act: (a: HostActio
                 <span className="row" style={{ gap: 6 }}>
                   {round === 2 && (
                     <span className="subm" title={p.guess ? `Named ${p.guess.company}` : 'Has not answered the quiz yet'}>
-                      {p.guess ? (p.guess.correct ? <span className="ok">Q ✓</span> : <span className="no">Q ✗</span>) : 'Q …'}
+                      {p.guess ? (p.guess.correct ? <span className="ok">Quiz <Icon name="check" size="sm" /></span> : <span className="no">Quiz <Icon name="x" size="sm" /></span>) : 'Quiz …'}
                     </span>
                   )}
-                  {round && <span className={`subm${submitted ? ' yes' : ''}`}>{submitted ? '✓ in' : '…'}</span>}
+                  {round && <span className={`subm${submitted ? ' yes' : ''}`}>{submitted ? <><Icon name="check" size="sm" /> In</> : '…'}</span>}
                   {p.isDemo && p.token && (
                     <a className="subm" href={`/?as=${encodeURIComponent(p.token)}`} target="_blank" rel="noreferrer" title="Preview this demo participant's screen">
                       view
@@ -400,7 +403,7 @@ function Participants({ view, act, round }: { view: HostView; act: (a: HostActio
                   )}
                   {canRemove && (
                     <button className="subm" style={{ background: 'none', cursor: 'pointer' }} onClick={() => act({ type: 'removePlayer', playerId: p.id })} aria-label={`Remove ${p.name}`}>
-                      ✕
+                      <Icon name="x" size="sm" />
                     </button>
                   )}
                 </span>
@@ -418,10 +421,10 @@ function RoundLive({ view }: { view: HostView }) {
   const { remainingMs, paused } = useCountdown(view.session.timer, view.serverNow);
   const c = view.counts;
   return (
-    <section className="card pad stack" style={{ textAlign: 'center', justifyItems: 'center', padding: 36 }}>
-      <span className="eyebrow brass">Round {round} · decisions open</span>
+    <section className="live-card">
+      <span className="eyebrow">Round {round} · decisions open</span>
       <span className={`bigclock${remainingMs < 20000 && !paused ? ' urgent' : ''}`} role="timer">
-        {paused ? `❚❚ ${clock(remainingMs)}` : clock(remainingMs)}
+        {paused ? `Paused · ${clock(remainingMs)}` : clock(remainingMs)}
       </span>
       <p className="display" style={{ fontSize: 30 }}>
         {c.submissions} of {c.expectedSubmissions} CEOs have locked a price
